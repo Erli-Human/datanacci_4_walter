@@ -7,7 +7,7 @@ inventory records through the bot posting pipeline.
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from pathlib import Path
 
 # Import modules from the same package
@@ -255,6 +255,202 @@ def post_single_with_df_update(df, record_index: int, bot: KijijiBot,
             'record_id': f"Index-{record_index}",
             'timestamp': datetime.now().isoformat()
         }
+
+
+def run_batch(df, mode: str, bot, images_dir: Optional[Path] = None, 
+              progress_cb=None, file_path: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
+    """
+    Batch processor for posting multiple inventory records.
+    
+    Args:
+        df: Pandas DataFrame containing inventory data
+        mode: Processing mode - 'new' (only blank/failed) or 'all' (entire sheet)
+        bot: Initialized KijijiBot instance
+        images_dir: Optional directory path for images
+        progress_cb: Optional callback function for progress updates
+                    Should accept (percentage: float, message: str)
+    
+    Returns:
+        Dict with batch processing results:
+        {
+            'success': bool,           # True if batch completed without critical errors
+            'total_records': int,      # Total number of records processed
+            'successful_posts': int,   # Number of successful posts
+            'failed_posts': int,       # Number of failed posts
+            'skipped_records': int,    # Number of records skipped
+            'results': List[Dict],     # Individual results for each processed record
+            'message': str             # Summary message
+        }
+    """
+    logger.info(f"Starting batch processing with mode: {mode}")
+    
+    # Initialize result tracking
+    batch_result = {
+        'success': True,
+        'total_records': 0,
+        'successful_posts': 0,
+        'failed_posts': 0,
+        'skipped_records': 0,
+        'results': [],
+        'message': ''
+    }
+    
+    # Determine which records to process based on mode
+    if mode == 'new':
+        # Only process records where posting_status is blank, 'pending', or starts with 'Error'
+        mask = (
+            df['posting_status'].isna() | 
+            (df['posting_status'] == '') | 
+            (df['posting_status'] == 'pending') |
+            df['posting_status'].str.startswith('Error', na=False)
+        )
+        records_to_process = df[mask].index.tolist()
+        logger.info(f"Mode 'new': Found {len(records_to_process)} records to process")
+    elif mode == 'all':
+        # Process entire sheet
+        records_to_process = df.index.tolist()
+        logger.info(f"Mode 'all': Processing all {len(records_to_process)} records")
+    else:
+        error_msg = f"Invalid mode '{mode}'. Must be 'new' or 'all'"
+        logger.error(error_msg)
+        batch_result['success'] = False
+        batch_result['message'] = error_msg
+        return batch_result
+    
+    batch_result['total_records'] = len(records_to_process)
+    
+    if len(records_to_process) == 0:
+        batch_result['message'] = "No records to process"
+        logger.info("No records found to process")
+        return batch_result
+    
+    # Process records with progress tracking
+    persist_interval = max(1, len(records_to_process) // 10)  # Persist every 10% or at least every record
+    processed_count = 0
+    
+    try:
+        for i, record_index in enumerate(records_to_process):
+            processed_count += 1
+            
+            # Calculate progress percentage
+            progress_percentage = (processed_count / len(records_to_process)) * 100
+            
+            # Get record info for progress message
+            try:
+                record_id = df.at[record_index, 'bucket_truck_id']
+            except:
+                record_id = f"Index-{record_index}"
+            
+            progress_message = f"Processing record {processed_count}/{len(records_to_process)}: {record_id}"
+            
+            # Emit progress to UI if callback provided
+            if progress_cb:
+                try:
+                    progress_cb(progress_percentage, progress_message)
+                except Exception as e:
+                    logger.warning(f"Progress callback failed: {e}")
+            
+            logger.info(progress_message)
+            
+            try:
+                # Process the single record
+                result = post_single_with_df_update(df, record_index, bot, images_dir)
+                
+                # Track results
+                batch_result['results'].append(result)
+                
+                if result['success']:
+                    batch_result['successful_posts'] += 1
+                    logger.info(f"✓ Record {record_id} posted successfully")
+                else:
+                    batch_result['failed_posts'] += 1
+                    logger.warning(f"✗ Record {record_id} failed: {result['message']}")
+                    
+            except Exception as e:
+                # Handle individual record processing errors
+                error_msg = f"Error processing record {record_id}: {str(e)}"
+                logger.exception(error_msg)
+                
+                batch_result['failed_posts'] += 1
+                batch_result['results'].append({
+                    'success': False,
+                    'message': error_msg,
+                    'status_update': "Error: System error",
+                    'ad_url': None,
+                    'record_id': record_id,
+                    'timestamp': datetime.now().isoformat()
+                })
+                
+                # Try to update the DataFrame status
+                try:
+                    update_record_status(df, record_index, "Error: System error")
+                except:
+                    pass
+            
+            # Persist spreadsheet periodically
+            if processed_count % persist_interval == 0 or processed_count == len(records_to_process):
+                if file_path and data_io is not None:
+                    try:
+                        logger.info(f"Persisting spreadsheet after {processed_count} records")
+                        persist_dataframe(df, file_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to persist spreadsheet: {e}")
+                elif processed_count == len(records_to_process):
+                    # Always log when we reach the end, even if no file path provided
+                    logger.info("Batch processing completed - no file path provided for persistence")
+    
+    except KeyboardInterrupt:
+        logger.info("Batch processing interrupted by user")
+        batch_result['success'] = False
+        batch_result['message'] = f"Batch processing interrupted after {processed_count} records"
+        return batch_result
+    
+    except Exception as e:
+        logger.exception(f"Critical error during batch processing: {e}")
+        batch_result['success'] = False
+        batch_result['message'] = f"Critical error: {str(e)}"
+        return batch_result
+    
+    # Final progress update
+    if progress_cb:
+        try:
+            progress_cb(100.0, "Batch processing completed")
+        except Exception as e:
+            logger.warning(f"Final progress callback failed: {e}")
+    
+    # Generate summary message
+    summary = f"Batch processing completed: {batch_result['successful_posts']} successful, {batch_result['failed_posts']} failed"
+    if batch_result['skipped_records'] > 0:
+        summary += f", {batch_result['skipped_records']} skipped"
+    
+    batch_result['message'] = summary
+    logger.info(summary)
+    
+    return batch_result
+
+
+def persist_dataframe(df, file_path: Union[str, Path]) -> bool:
+    """
+    Helper function to persist the DataFrame to Excel file.
+    
+    Args:
+        df: Pandas DataFrame to save
+        file_path: Path to save the Excel file
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        if data_io is not None:
+            data_io.save_inventory(df, file_path)
+            logger.info(f"DataFrame persisted to {file_path}")
+            return True
+        else:
+            logger.warning("data_io module not available - cannot persist DataFrame")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to persist DataFrame: {e}")
+        return False
 
 
 # Example usage and testing

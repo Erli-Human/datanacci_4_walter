@@ -1,5 +1,5 @@
 """
-Walterv Kijiji automation system.
+Walter the Kijiji agent - Apache 2.0 
 
 This module provides a web-based interface with:
 - Textboxes for Kijiji email & password
@@ -20,6 +20,7 @@ import tempfile
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
+from io import StringIO  # <-- Correct import
 
 # Import the app modules
 try:
@@ -310,7 +311,7 @@ _Note: Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported imag
             "Make sure your spreadsheet (CSV/XLS/XLSX/ODS) matches these columns."
         )
         gr.Dataframe(
-            value=pd.read_csv(pd.compat.StringIO(truck_csv_example)),
+            value=pd.read_csv(StringIO(truck_csv_example)),  # <-- Fix here!
             label="Truck CSV Example",
             interactive=False,
             wrap=True

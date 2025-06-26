@@ -1,5 +1,5 @@
 """
-Gradio UI for the Kijiji automation system.
+Gradio UI for the Datanacci Walter Kijiji automation system.
 
 This module provides a web-based interface with:
 - Textboxes for Kijiji email & password
@@ -13,7 +13,6 @@ This module provides a web-based interface with:
 
 All callbacks call routines above, return real-time logs & updated sheet for download.
 """
-
 import gradio as gr
 import pandas as pd
 import threading
@@ -38,292 +37,9 @@ logger = logging.getLogger(__name__)
 processing_state = {
     'is_running': False,
     'progress': 0.0,
-    'current_message': '',
-    'logs': [],
-    'results': None
+    'current_message': 'Ready',
+    'logs': []
 }
-
-
-class LogHandler(logging.Handler):
-    """Custom logging handler to capture logs for UI display."""
-    
-    def __init__(self):
-        super().__init__()
-        self.logs = []
-    
-    def emit(self, record):
-        log_entry = {
-            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'level': record.levelname,
-            'message': record.getMessage()
-        }
-        self.logs.append(log_entry)
-        processing_state['logs'] = self.logs[-50:]  # Keep last 50 logs
-
-
-def load_bucket_truck_ids(file_path: Optional[str]) -> List[str]:
-    """
-    Load bucket_truck_id values from the uploaded spreadsheet.
-    
-    Args:
-        file_path: Path to the uploaded Excel file
-        
-    Returns:
-        List of bucket_truck_id values
-    """
-    if not file_path:
-        return ["No spreadsheet loaded"]
-    
-    try:
-        df = data_io.load_inventory(file_path)
-        truck_ids = df['bucket_truck_id'].astype(str).tolist()
-        return truck_ids if truck_ids else ["No truck IDs found"]
-    except Exception as e:
-        logger.error(f"Error loading truck IDs: {e}")
-        return [f"Error: {str(e)}"]
-
-
-def update_truck_dropdown(file_path: Optional[str]) -> gr.Dropdown:
-    """
-    Update the truck ID dropdown when a new spreadsheet is uploaded.
-    """
-    truck_ids = load_bucket_truck_ids(file_path)
-    return gr.Dropdown.update(choices=truck_ids, value=truck_ids[0] if truck_ids else None)
-
-
-def toggle_truck_dropdown(mode: str) -> gr.Dropdown:
-    """
-    Show/hide the truck ID dropdown based on selected mode.
-    """
-    if mode == "Single":
-        return gr.Dropdown.update(visible=True)
-    else:
-        return gr.Dropdown.update(visible=False)
-
-
-def progress_callback(percentage: float, message: str) -> None:
-    """
-    Progress callback function for batch processing.
-    """
-    processing_state['progress'] = percentage
-    processing_state['current_message'] = message
-    logger.info(f"Progress: {percentage:.1f}% - {message}")
-
-
-def post_single_record(email: str, password: str, file_path: str, images_dir: str, 
-                      selected_truck_id: str) -> Dict[str, Any]:
-    """
-    Post a single record based on selected truck ID.
-    
-    Args:
-        email: Kijiji email
-        password: Kijiji password
-        file_path: Path to spreadsheet
-        images_dir: Directory containing images
-        selected_truck_id: Selected bucket_truck_id to post
-        
-    Returns:
-        Dict with processing results
-    """
-    try:
-        # Load data
-        df = data_io.load_inventory(file_path)
-        
-        # Find the record with matching truck ID
-        record_row = df[df['bucket_truck_id'] == selected_truck_id]
-        if record_row.empty:
-            return {
-                'success': False,
-                'message': f'No record found with truck ID: {selected_truck_id}',
-                'logs': processing_state['logs']
-            }
-        
-        # Get the record data
-        record_index = record_row.index[0]
-        record = data_io.get_record(record_row.iloc[0])
-        
-        # Initialize bot
-        bot = KijijiBot(email, password, headless=True)
-        
-        # Login
-        login_result = bot.login()
-        if not login_result['success']:
-            bot.close()
-            return {
-                'success': False,
-                'message': f'Login failed: {login_result["message"]}',
-                'logs': processing_state['logs']
-            }
-        
-        # Post single record
-        result = posting.post_single_with_df_update(df, record_index, bot, Path(images_dir))
-        
-        # Close bot
-        bot.close()
-        
-        # Save updated spreadsheet
-        output_path = file_path.replace('.xlsx', '_updated.xlsx')
-        data_io.save_inventory(df, output_path)
-        
-        return {
-            'success': result['success'],
-            'message': result['message'],
-            'logs': processing_state['logs'],
-            'updated_file': output_path
-        }
-        
-    except Exception as e:
-        logger.exception(f"Error in single record posting: {e}")
-        return {
-            'success': False,
-            'message': f'Error: {str(e)}',
-            'logs': processing_state['logs']
-        }
-
-
-def run_batch_processing(email: str, password: str, file_path: str, images_dir: str, 
-                        mode: str) -> Dict[str, Any]:
-    """
-    Run batch processing for multiple records.
-    
-    Args:
-        email: Kijiji email
-        password: Kijiji password
-        file_path: Path to spreadsheet
-        images_dir: Directory containing images
-        mode: 'Batch-New' or 'Batch-All'
-        
-    Returns:
-        Dict with processing results
-    """
-    try:
-        # Load data
-        df = data_io.load_inventory(file_path)
-        
-        # Initialize bot
-        bot = KijijiBot(email, password, headless=True)
-        
-        # Login
-        login_result = bot.login()
-        if not login_result['success']:
-            bot.close()
-            return {
-                'success': False,
-                'message': f'Login failed: {login_result["message"]}',
-                'logs': processing_state['logs']
-            }
-        
-        # Determine batch mode
-        batch_mode = 'new' if mode == 'Batch-New' else 'all'
-        
-        # Run batch processing
-        result = posting.run_batch(
-            df=df,
-            mode=batch_mode,
-            bot=bot,
-            images_dir=Path(images_dir),
-            progress_cb=progress_callback,
-            file_path=file_path
-        )
-        
-        # Close bot
-        bot.close()
-        
-        # Save final updated spreadsheet
-        output_path = file_path.replace('.xlsx', '_batch_updated.xlsx')
-        data_io.save_inventory(df, output_path)
-        
-        return {
-            'success': result['success'],
-            'message': result['message'],
-            'total_records': result['total_records'],
-            'successful_posts': result['successful_posts'],
-            'failed_posts': result['failed_posts'],
-            'logs': processing_state['logs'],
-            'updated_file': output_path
-        }
-        
-    except Exception as e:
-        logger.exception(f"Error in batch processing: {e}")
-        return {
-            'success': False,
-            'message': f'Error: {str(e)}',
-            'logs': processing_state['logs']
-        }
-
-
-def process_ads(email: str, password: str, file_obj: Optional[str], images_dir: str, 
-               mode: str, selected_truck_id: Optional[str]) -> Tuple[str, Dict, str]:
-    """
-    Main processing function called by the UI.
-    
-    Args:
-        email: Kijiji email
-        password: Kijiji password
-        file_obj: Uploaded file object or path
-        images_dir: Directory containing images
-        mode: Processing mode (Single/Batch-New/Batch-All)
-        selected_truck_id: Selected truck ID for single mode
-        
-    Returns:
-        Tuple of (status_message, logs_dict, download_file_path)
-    """
-    # Reset processing state
-    processing_state['is_running'] = True
-    processing_state['progress'] = 0.0
-    processing_state['current_message'] = 'Starting...'
-    processing_state['logs'] = []
-    
-    # Set up logging
-    log_handler = LogHandler()
-    logger.addHandler(log_handler)
-    
-    try:
-        # Validate inputs
-        if not email or not password:
-            return "Error: Email and password are required", {"error": "Missing credentials"}, ""
-        
-        if not file_obj:
-            return "Error: Please upload a spreadsheet", {"error": "Missing spreadsheet"}, ""
-        
-        if not images_dir:
-            return "Error: Please specify images directory", {"error": "Missing images directory"}, ""
-        
-        file_path = file_obj.name if hasattr(file_obj, 'name') else str(file_obj)
-        
-        # Process based on mode
-        if mode == "Single":
-            if not selected_truck_id:
-                return "Error: Please select a truck ID", {"error": "Missing truck ID"}, ""
-            
-            result = post_single_record(email, password, file_path, images_dir, selected_truck_id)
-        else:
-            result = run_batch_processing(email, password, file_path, images_dir, mode)
-        
-        # Prepare response
-        if result['success']:
-            status_msg = f"✅ {result['message']}"
-            if 'updated_file' in result:
-                download_path = result['updated_file']
-            else:
-                download_path = ""
-        else:
-            status_msg = f"❌ {result['message']}"
-            download_path = ""
-        
-        logs_dict = {"logs": result.get('logs', [])}
-        
-        return status_msg, logs_dict, download_path
-        
-    except Exception as e:
-        logger.exception(f"Unexpected error in process_ads: {e}")
-        return f"❌ Unexpected error: {str(e)}", {"error": str(e)}, ""
-    
-    finally:
-        # Clean up
-        processing_state['is_running'] = False
-        logger.removeHandler(log_handler)
-
 
 def get_progress_info() -> Tuple[float, str]:
     """
@@ -333,7 +49,6 @@ def get_progress_info() -> Tuple[float, str]:
         Tuple of (progress_percentage, current_message)
     """
     return processing_state['progress'], processing_state['current_message']
-
 
 def create_ui() -> gr.Blocks:
     """
@@ -411,7 +126,11 @@ def create_ui() -> gr.Blocks:
                     interactive=False
                 )
                 
-                progress_bar = gr.Progress(label="Processing Progress")
+                progress_output = gr.Number(
+                    label="Progress (%)",
+                    value=0,
+                    interactive=False
+                )
                 
                 logs_output = gr.JSON(
                     label="Live Logs",
@@ -454,12 +173,12 @@ def create_ui() -> gr.Blocks:
             outputs=[
                 status_output,
                 logs_output,
-                download_file
+                download_file,
+                progress_output
             ]
         )
     
     return interface
-
 
 def launch_ui(server_name: str = "127.0.0.1", server_port: int = 7860, share: bool = False) -> None:
     """
@@ -486,5 +205,3 @@ def launch_ui(server_name: str = "127.0.0.1", server_port: int = 7860, share: bo
 if __name__ == "__main__":
     # Launch the UI
     launch_ui()
-
- 

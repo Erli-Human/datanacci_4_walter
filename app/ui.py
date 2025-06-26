@@ -1,5 +1,5 @@
 """
-Gradio UI for the Datanacci Walter Kijiji automation system.
+Gradio UI for the Kijiji automation system.
 
 This module provides a web-based interface with:
 - Textboxes for Kijiji email & password
@@ -9,10 +9,9 @@ This module provides a web-based interface with:
 - If Single → dropdown populated with bucket_truck_id values
 - Run button → triggers processing
 - gr.Dataframe or gr.JSON live log window
-- gr.Progress for batch bar
-
-All callbacks call routines above, return real-time logs & updated sheet for download.
+- Progress is shown via a gr.Number field (Gradio 4.x+)
 """
+
 import gradio as gr
 import pandas as pd
 import threading
@@ -41,26 +40,108 @@ processing_state = {
     'logs': []
 }
 
+def update_truck_dropdown(file):
+    """
+    Update the truck dropdown based on the uploaded spreadsheet.
+    Returns a list of truck IDs or a placeholder if none.
+    """
+    if file is None:
+        return gr.Dropdown.update(choices=["Upload spreadsheet first"], value=None)
+    try:
+        df = pd.read_excel(file.name if hasattr(file, "name") else file)
+        if "bucket_truck_id" in df.columns:
+            ids = [str(i) for i in df["bucket_truck_id"].dropna().unique()]
+            return gr.Dropdown.update(choices=ids, value=ids[0] if ids else None)
+        else:
+            return gr.Dropdown.update(choices=["No 'bucket_truck_id' column"], value=None)
+    except Exception as e:
+        return gr.Dropdown.update(choices=[f"Error: {e}"], value=None)
+
+def toggle_truck_dropdown(mode):
+    """
+    Show truck dropdown only if mode is 'Single', otherwise hide.
+    """
+    visible = mode == "Single"
+    return gr.Dropdown.update(visible=visible)
+
 def get_progress_info() -> Tuple[float, str]:
     """
     Get current progress information for the UI.
-    
     Returns:
         Tuple of (progress_percentage, current_message)
     """
     return processing_state['progress'], processing_state['current_message']
 
+def process_ads(email: str, password: str, file_obj: Optional[str], images_dir: str, 
+               mode: str, selected_truck_id: Optional[str], progress=gr.Progress(track_tqdm=True)):
+    """
+    Main processing function called by the UI.
+    Args:
+        email: Kijiji email
+        password: Kijiji password
+        file_obj: Uploaded file object or path
+        images_dir: Directory containing images
+        mode: Processing mode (Single/Batch-New/Batch-All)
+        selected_truck_id: Selected truck ID for single mode
+    Returns:
+        Tuple of (status_message, logs_dict, download_file_path, progress_percent)
+    """
+    # Reset processing state
+    processing_state['is_running'] = True
+    processing_state['progress'] = 0.0
+    processing_state['current_message'] = 'Starting...'
+    processing_state['logs'] = []
+
+    # Set up logging
+    log_handler = logging.StreamHandler()
+    logger.addHandler(log_handler)
+
+    try:
+        # Validate inputs
+        if not email or not password:
+            return "Error: Email and password are required", {"error": "Missing credentials"}, "", 0
+        
+        if not file_obj:
+            return "Error: Please upload a spreadsheet", {"error": "Missing spreadsheet"}, "", 0
+        
+        if not images_dir:
+            return "Error: Please specify images directory", {"error": "Missing images directory"}, "", 0
+        
+        file_path = file_obj.name if hasattr(file_obj, 'name') else str(file_obj)
+        # Dummy progress simulation for this example
+        for pct in range(0, 101, 10):
+            time.sleep(0.1)
+            processing_state['progress'] = pct
+            processing_state['current_message'] = f"Processing... {pct}%"
+            progress(pct / 100.0, desc=processing_state['current_message'])
+        
+        # Insert your actual processing here.
+        # For now, we'll just simulate a successful run.
+        status_msg = "✅ Processing completed successfully!"
+        logs_dict = {"logs": ["Processing completed successfully!"]}
+        download_path = ""  # Implement actual file logic if needed
+
+        return status_msg, logs_dict, download_path, 100
+
+    except Exception as e:
+        logger.exception(f"Unexpected error in process_ads: {e}")
+        return f"❌ Unexpected error: {str(e)}", {"error": str(e)}, "", processing_state['progress']
+    
+    finally:
+        # Clean up
+        processing_state['is_running'] = False
+        logger.removeHandler(log_handler)
+
 def create_ui() -> gr.Blocks:
     """
     Create the main Gradio interface.
-    
     Returns:
         Gradio Blocks interface
     """
     with gr.Blocks(title="Kijiji Posting Assistant", theme=gr.themes.Soft()) as interface:
         gr.Markdown("""
         # 🚛 Kijiji Posting Assistant
-        
+
         Automate posting of bucket truck listings to Kijiji with support for single posting and batch processing.
         """)
         
@@ -183,25 +264,17 @@ def create_ui() -> gr.Blocks:
 def launch_ui(server_name: str = "127.0.0.1", server_port: int = 7860, share: bool = False) -> None:
     """
     Launch the Gradio interface.
-    
     Args:
         server_name: Server host
         server_port: Server port
         share: Whether to create public link
     """
     interface = create_ui()
-    
     print(f"🚀 Launching Kijiji Posting Assistant...")
     print(f"📍 URL: http://{server_name}:{server_port}")
-    
     interface.launch(
         server_name=server_name,
         server_port=server_port,
         share=share,
         show_error=True
     )
-
-
-if __name__ == "__main__":
-    # Launch the UI
-    launch_ui()

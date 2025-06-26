@@ -20,7 +20,7 @@ import tempfile
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
-from io import StringIO  # <-- Correct import
+from io import StringIO
 
 # Import the app modules
 try:
@@ -41,6 +41,15 @@ processing_state = {
     'logs': []
 }
 
+def safe_path(filename: str) -> Path:
+    """
+    Restrict uploaded file processing to a safe temporary directory.
+    Prevents path traversal and malicious path injection.
+    """
+    safe_dir = Path(tempfile.gettempdir())
+    base = Path(filename).name  # only the basename, no directories
+    return safe_dir / base
+
 def update_truck_dropdown(file):
     """
     Update the truck dropdown based on the uploaded spreadsheet.
@@ -49,15 +58,23 @@ def update_truck_dropdown(file):
     if file is None:
         return gr.Dropdown.update(choices=["Upload spreadsheet first"], value=None)
     try:
-        # Support all common spreadsheet formats
-        filename = file.name if hasattr(file, "name") else str(file)
-        ext = Path(filename).suffix.lower()
+        # Save file safely to a temp file, never trust file.name path
+        if hasattr(file, "name"):
+            # Gradio 4.x uses file-like objects, must save it safely
+            temp_path = safe_path(file.name)
+            with open(temp_path, "wb") as out_f:
+                out_f.write(file.read())
+        else:
+            temp_path = safe_path(str(file))
+            with open(temp_path, "wb") as out_f:
+                out_f.write(file.read())
+        ext = temp_path.suffix.lower()
         if ext == ".csv":
-            df = pd.read_csv(filename)
+            df = pd.read_csv(temp_path)
         elif ext in [".xls", ".xlsx"]:
-            df = pd.read_excel(filename)
+            df = pd.read_excel(temp_path)
         elif ext == ".ods":
-            df = pd.read_excel(filename, engine="odf")
+            df = pd.read_excel(temp_path, engine="odf")
         else:
             return gr.Dropdown.update(choices=["Unsupported spreadsheet format"], value=None)
         if "bucket_truck_id" in df.columns:
@@ -118,7 +135,16 @@ def process_ads(email: str, password: str, file_obj: Optional[str], images_dir: 
         if not images_dir:
             return "Error: Please specify images directory", {"error": "Missing images directory"}, "", 0
         
-        file_path = file_obj.name if hasattr(file_obj, 'name') else str(file_obj)
+        # Save file safely to a temp file for backend processing
+        if hasattr(file_obj, "name"):
+            temp_path = safe_path(file_obj.name)
+            with open(temp_path, "wb") as out_f:
+                out_f.write(file_obj.read())
+        else:
+            temp_path = safe_path(str(file_obj))
+            with open(temp_path, "wb") as out_f:
+                out_f.write(file_obj.read())
+
         # Dummy progress simulation for this example
         for pct in range(0, 101, 10):
             time.sleep(0.1)
@@ -311,10 +337,9 @@ _Note: Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported imag
             "Make sure your spreadsheet (CSV/XLS/XLSX/ODS) matches these columns."
         )
         gr.Dataframe(
-            value=pd.read_csv(StringIO(truck_csv_example)),  # <-- Fix here!
+            value=pd.read_csv(StringIO(truck_csv_example)),
             label="Truck CSV Example",
-            interactive=False,
-            wrap=True
+            interactive=False
         )
         gr.Markdown(
             f"```\n{truck_csv_example}```"

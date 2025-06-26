@@ -1,14 +1,19 @@
-# Kijiji Posting Assistant - UI Requirements
+# Datanacci Kijiji Posting Agent - UI Requirements
+gradio>=4.16.0
+pandas
+selenium
+openpyxl
+webdriver-manager
 # Web UI framework
-gradio>=3.50.0
+#gradio>=3.50.0
 
 # Data handling
-pandas>=1.5.0
-openpyxl>=3.0.0
+#pandas>=1.5.0
+#openpyxl>=3.0.0
 
 # Web automation
-selenium>=4.0.0
-webdriver-manager>=3.8.0
+#selenium>=4.0.0
+#webdriver-manager>=3.8.0
 
 # Logging and utilities
 logging

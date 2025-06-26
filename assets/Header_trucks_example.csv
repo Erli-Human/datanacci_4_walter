@@ -1,0 +1,4 @@
+bucket_truck_id,title,description,price,year,make,model,kilometers,location,image_filenames,Datanacci_nssk
+truck_1,Bucket Truck 1,"Well maintained truck 1",35000,2016,Ford,F-450,120000,Toronto,"truck1_1.jpg,truck1_2.jpg",NSSK-123A
+truck_2,Bucket Truck 2,"Low mileage, clean",42000,2018,GMC,"Sierra 3500",85000,Ottawa,"truck2_1.jpg,truck2_2.jpg",NSSK-456B
+truck_3,Bucket Truck 3,"Ready for work",39000,2017,Dodge,"RAM 5500",101000,Hamilton,"truck3_1.jpg,truck3_2.jpg",NSSK-789C

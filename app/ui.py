@@ -2,9 +2,6 @@
 Datanacci DAO - All rights reserved
 HelixEncoder(Kijiji) automation Agent
 
-"""
-Gradio UI for the Kijiji automation system.
-
 This module provides a web-based interface with:
 - Textboxes for Kijiji email & password
 - FileUpload for spreadsheet (or path input)

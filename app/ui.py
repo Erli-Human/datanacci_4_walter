@@ -152,6 +152,37 @@ def create_ui() -> gr.Blocks:
     Returns:
         Gradio Blocks interface
     """
+    truck_csv_example = (
+        "bucket_truck_id,image_filename,title,description,price,tags,fuel_type,equipment_type,posting_status\n"
+        "BT001,truck1.jpg,Test Truck 1,Description 1,45000,test,truck,diesel,bucket truck,pending\n"
+        "BT002,truck2.jpg,Test Truck 2,Description 2,38000,test,vehicle,gasoline,utility truck,\n"
+        "BT003,truck3.jpg,Test Truck 3,Description 3,52000,test,equipment,diesel,service truck,pending\n"
+    )
+
+    instructions_markdown = """
+### ℹ️ Modes & Spreadsheet Download Instructions
+
+**Single Mode:**  
+- Select a single truck (via the dropdown) to post one listing from your spreadsheet.
+
+**Batch-New Mode:**  
+- Posts all listings in your spreadsheet which have a `posting_status` column that is blank or marked as `pending` or `failed`.  
+- Skips any listings already marked as `posted` or otherwise completed.
+
+**Batch-All Mode:**  
+- Posts (or re-posts) all listings in your spreadsheet, regardless of their current `posting_status`.
+
+**Spreadsheet Download:**  
+- After processing, you can download your spreadsheet back.  
+- The system will update the `posting_status` column for each truck:
+    - `pending` = not yet attempted  
+    - `posted` = successfully posted  
+    - `failed` = posting attempt failed  
+- Use the downloaded sheet to keep track of which trucks have been posted or need retrying.
+
+_Note: Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image formats are JPG, PNG, GIF, and WEBP. Ensure your images directory matches filenames in your spreadsheet._
+"""
+
     with gr.Blocks(title="CaveSheepCollective Kijiji Agent Config", theme=gr.themes.Soft()) as interface:
         gr.Markdown("""
         # 🚛 CaveSheepCollective Kijiji Agent Config
@@ -159,12 +190,14 @@ def create_ui() -> gr.Blocks:
         Automate posting of bucket truck listings to Kijiji with support for single posting and batch processing.
         """)
 
+        gr.Markdown(instructions_markdown)
+
         with gr.Row():
             with gr.Column(scale=1):
                 gr.Markdown("### 🔐 Credentials")
                 email_input = gr.Textbox(
                     label="Kijiji Email",
-                    placeholder="walter@example.com",
+                    placeholder="your.email@example.com",
                     type="email"
                 )
                 password_input = gr.Textbox(
@@ -272,6 +305,22 @@ def create_ui() -> gr.Blocks:
                 download_file,
                 progress_output
             ]
+        )
+
+        # --- Truck CSV Example Section at the bottom ---
+        gr.Markdown("### 📝 Truck CSV Example")
+        gr.Markdown(
+            "Below is a sample CSV file format for your truck inventory upload. "
+            "Make sure your spreadsheet (CSV/XLS/XLSX/ODS) matches these columns."
+        )
+        gr.Dataframe(
+            value=pd.read_csv(pd.compat.StringIO(truck_csv_example)),
+            label="Truck CSV Example",
+            interactive=False,
+            wrap=True
+        )
+        gr.Markdown(
+            f"```\n{truck_csv_example}```"
         )
 
     return interface

@@ -1,16 +1,16 @@
 """
-Gradio UI for the Kijiji automation system.
+Datanacci DAO - All rights reserved
+HelixEncoder(Kijiji) automation Agent
 
 This module provides a web-based interface with:
 - Textboxes for Kijiji email & password
-- FileUpload for spreadsheet (or path input), now supports .csv files
+- FileUpload for spreadsheet (or path input)
 - Directory input for images (text)
 - Radio: Mode (Single / Batch-New / Batch-All)
 - If Single → dropdown populated with bucket_truck_id values
 - Run button → triggers processing
 - gr.Dataframe or gr.JSON live log window
 - Progress is shown via a gr.Number field (Gradio 4.x+)
-- CSV Example at the bottom behind a collapsible panel
 """
 
 import gradio as gr
@@ -41,30 +41,15 @@ processing_state = {
     'logs': []
 }
 
-def read_spreadsheet(file):
-    """
-    Reads an uploaded spreadsheet (Excel or CSV) and returns a DataFrame.
-    """
-    if file is None:
-        return None
-    file_name = file.name if hasattr(file, "name") else file
-    if file_name.lower().endswith('.csv'):
-        df = pd.read_csv(file_name)
-    else:
-        df = pd.read_excel(file_name)
-    return df
-
 def update_truck_dropdown(file):
     """
-    Update the truck dropdown based on the uploaded spreadsheet (Excel or CSV).
+    Update the truck dropdown based on the uploaded spreadsheet.
     Returns a list of truck IDs or a placeholder if none.
     """
     if file is None:
         return gr.Dropdown.update(choices=["Upload spreadsheet first"], value=None)
     try:
-        df = read_spreadsheet(file)
-        if df is None:
-            return gr.Dropdown.update(choices=["Upload spreadsheet first"], value=None)
+        df = pd.read_excel(file.name if hasattr(file, "name") else file)
         if "bucket_truck_id" in df.columns:
             ids = [str(i) for i in df["bucket_truck_id"].dropna().unique()]
             return gr.Dropdown.update(choices=ids, value=ids[0] if ids else None)
@@ -154,9 +139,9 @@ def create_ui() -> gr.Blocks:
     Returns:
         Gradio Blocks interface
     """
-    with gr.Blocks(title="Kijiji Posting Assistant", theme=gr.themes.Soft()) as interface:
+    with gr.Blocks(title="CaveSheepCollective Kijiji Agent Config", theme=gr.themes.Soft()) as interface:
         gr.Markdown("""
-        # 🚛 Kijiji Posting Assistant
+        # 🚛 CaveSheepCollective Kijiji Agent Config
 
         Automate posting of bucket truck listings to Kijiji with support for single posting and batch processing.
         """)
@@ -177,8 +162,8 @@ def create_ui() -> gr.Blocks:
                 
                 gr.Markdown("### 📁 Files & Directories")
                 spreadsheet_input = gr.File(
-                    label="Upload Spreadsheet (.xlsx, .xls, .csv)",
-                    file_types=[".xlsx", ".xls", ".csv"]
+                    label="Upload Spreadsheet (.xlsx)",
+                    file_types=[".xlsx", ".xls"]
                 )
                 images_dir_input = gr.Textbox(
                     label="Images Directory Path",
@@ -239,19 +224,7 @@ def create_ui() -> gr.Blocks:
                     label="Download Updated Spreadsheet",
                     visible=False
                 )
-
-        # Collapsible CSV Example Panel (hidden by default)
-        with gr.Accordion("CSV Example (click to expand)", open=False):
-            gr.Markdown("""
-            **CSV Example:**  
-            ```
-            bucket_truck_id,title,description,price,year,make,model,kilometers,location,image_filenames,Datanacci_nssk
-            truck_1,Bucket Truck 1,"Well maintained truck 1",35000,2016,Ford,F-450,120000,Toronto,"truck1_1.jpg,truck1_2.jpg",NSSK-123A
-            truck_2,Bucket Truck 2,"Low mileage, clean",42000,2018,GMC,"Sierra 3500",85000,Ottawa,"truck2_1.jpg,truck2_2.jpg",NSSK-456B
-            truck_3,Bucket Truck 3,"Ready for work",39000,2017,Dodge,"RAM 5500",101000,Hamilton,"truck3_1.jpg,truck3_2.jpg",NSSK-789C
-            ```
-            """)
-
+        
         # Event handlers
         
         # Update truck dropdown when spreadsheet is uploaded

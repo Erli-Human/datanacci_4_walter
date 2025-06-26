@@ -1,6 +1,5 @@
 """
-Datanacci DAO - All rights reserved
-HelixEncoder(Kijiji) automation Agent
+Walterv Kijiji automation system.
 
 This module provides a web-based interface with:
 - Textboxes for Kijiji email & password

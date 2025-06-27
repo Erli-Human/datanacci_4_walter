@@ -7,6 +7,8 @@ from pathlib import Path
 from io import StringIO
 import uuid
 import os
+import traceback
+import mimetypes
 
 try:
     from . import data_io, posting, kijiji_bot
@@ -27,73 +29,97 @@ processing_state = {
 ASSETS_IMAGE_DIR = Path("app/assets/images")
 ASSETS_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
+ALLOWED_IMAGE_EXTS = {"jpg", "jpeg", "png", "gif", "webp"}
+
+def clean_filename(filename):
+    name = Path(filename).name
+    name = name.replace("..", "").replace("\\", "_").replace("/", "_")
+    return name
+
 def safe_save_uploaded_file(file_obj):
-    # Handles single uploaded file and returns a local temp file path (in a safe, writable temp directory)
-    if hasattr(file_obj, "read"):
-        suffix = getattr(file_obj, "name", ".csv")
-        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(suffix).suffix, mode="wb") as temp_file:
-            temp_file.write(file_obj.read())
-            return Path(temp_file.name)
-    file_path = str(getattr(file_obj, "name", file_obj))
-    file_path_obj = Path(file_path)
-    if file_path_obj.is_dir():
-        raise ValueError(f"Uploaded path {file_path_obj} is a directory, not a file.")
-    if file_path_obj.is_file() and os.access(file_path_obj, os.R_OK):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_path_obj.suffix, mode="wb") as temp_file:
-            with open(file_path_obj, "rb") as src:
-                shutil.copyfileobj(src, temp_file)
-            return Path(temp_file.name)
-    raise ValueError(f"Unsupported file object type or not a file: {file_path_obj}")
+    try:
+        if hasattr(file_obj, "read"):
+            suffix = getattr(file_obj, "name", ".csv")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=Path(suffix).suffix, mode="wb") as temp_file:
+                temp_file.write(file_obj.read())
+                return Path(temp_file.name)
+        file_path = str(getattr(file_obj, "name", file_obj))
+        file_path_obj = Path(file_path)
+        if file_path_obj.is_dir():
+            raise ValueError(f"Uploaded path {file_path_obj} is a directory, not a file.")
+        if file_path_obj.is_file() and os.access(file_path_obj, os.R_OK):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_path_obj.suffix, mode="wb") as temp_file:
+                with open(file_path_obj, "rb") as src:
+                    shutil.copyfileobj(src, temp_file)
+                return Path(temp_file.name)
+        raise ValueError(f"Unsupported file object type or not a file: {file_path_obj}")
+    except Exception as e:
+        tb = traceback.format_exc()
+        logger.error(f"safe_save_uploaded_file error: {e}\n{tb}")
+        raise
 
 def get_static_images():
-    allowed_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
     images = []
-    if ASSETS_IMAGE_DIR.exists() and ASSETS_IMAGE_DIR.is_dir():
-        for f in ASSETS_IMAGE_DIR.iterdir():
-            if f.is_file() and f.suffix.lower() in allowed_exts:
-                images.append(f.name)
+    try:
+        if ASSETS_IMAGE_DIR.exists() and ASSETS_IMAGE_DIR.is_dir():
+            for f in ASSETS_IMAGE_DIR.iterdir():
+                if f.is_file():
+                    ext = f.suffix.lower().lstrip(".")
+                    if ext in ALLOWED_IMAGE_EXTS:
+                        images.append(f.name)
+    except Exception as e:
+        logger.error(f"get_static_images error: {e}\n{traceback.format_exc()}")
     return images
 
+def is_allowed_image(filename):
+    ext = Path(filename).suffix.lower().lstrip(".")
+    return ext in ALLOWED_IMAGE_EXTS
+
 def save_uploaded_images(images_upload):
-    # Save all uploaded images to app/assets/images, return mapping {name: path}, handle errors, allow multi-upload
-    allowed_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
     name_to_path = {}
     error_msgs = []
+    debug_msgs = []
+    preview_paths = []
     if images_upload is not None:
         for img in images_upload:
-            img_name = Path(getattr(img, "name", uuid.uuid4().hex + ".img")).name
-            img_name = img_name.replace("..", "").replace("\\", "_").replace("/", "_")
-            ext = Path(img_name).suffix.lower()
-            if ext not in allowed_exts:
-                error_msgs.append(f"File '{img_name}' has unsupported extension.")
-                continue
-            img_path = ASSETS_IMAGE_DIR / img_name
             try:
+                img_name = clean_filename(getattr(img, "name", uuid.uuid4().hex + ".img"))
+                ext = Path(img_name).suffix.lower().lstrip(".")
+                if ext not in ALLOWED_IMAGE_EXTS:
+                    error_msgs.append(f"File '{img_name}' has unsupported extension: .{ext}")
+                    continue
+                img_path = ASSETS_IMAGE_DIR / img_name
                 img.seek(0)
+                try:
+                    data = img.read()
+                except Exception as re:
+                    error_msgs.append(f"Error reading '{img_name}': {re}")
+                    continue
                 with open(img_path, "wb") as out_f:
-                    out_f.write(img.read())
+                    out_f.write(data)
                 name_to_path[img_name] = str(img_path.resolve())
+                preview_paths.append(str(img_path.resolve()))
             except Exception as e:
-                logger.error(f"Error saving uploaded image {img_name}: {e}")
-                error_msgs.append(f"Error saving '{img_name}': {e}")
-    # Also return static images already in assets/images
-    for static_img in get_static_images():
-        static_path = ASSETS_IMAGE_DIR / static_img
-        name_to_path[static_img] = str(static_path.resolve())
-    return name_to_path, error_msgs
+                logger.error(f"Error saving uploaded image {img_name}: {e}\n{traceback.format_exc()}")
+                error_msgs.append(f"Error saving '{img_name}': {e}\n{traceback.format_exc()}")
+    try:
+        for static_img in get_static_images():
+            static_path = ASSETS_IMAGE_DIR / static_img
+            name_to_path[static_img] = str(static_path.resolve())
+            if str(static_path.resolve()) not in preview_paths:
+                preview_paths.append(str(static_path.resolve()))
+    except Exception as e:
+        logger.error(f"Error loading static images: {e}\n{traceback.format_exc()}")
+        error_msgs.append(f"Error loading static images: {e}\n{traceback.format_exc()}")
+    return name_to_path, error_msgs, debug_msgs, preview_paths
 
 def get_image_files(images_upload):
-    # Returns the list of image file names from uploaded files and from app/assets/images
     files = []
-    allowed_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
     if images_upload is not None:
         for img in images_upload:
             name = getattr(img, "name", None)
-            if name:
-                ext = Path(name).suffix.lower()
-                if ext in allowed_exts:
-                    files.append(name)
-    # Add static images from assets directory, deduplicating
+            if name and is_allowed_image(name):
+                files.append(clean_filename(name))
     static_images = get_static_images()
     for name in static_images:
         if name not in files:
@@ -101,16 +127,20 @@ def get_image_files(images_upload):
     return files
 
 def upload_images_handler(files):
-    # Handles the upload event for multi-files, stores to app/assets/images, returns success/error message
-    _, errs = save_uploaded_images(files)
+    name_to_path, errs, debugs, preview_paths = save_uploaded_images(files)
+    result = []
     if errs:
-        return f"Errors:\n" + "\n".join(errs)
-    return "Images uploaded successfully!"
+        result.append("Errors:\n" + "\n".join(errs))
+    if debugs:
+        result.append("Debug:\n" + "\n".join(debugs))
+    if not errs:
+        result.insert(0, "Images uploaded successfully!")
+    return "\n\n".join(result), preview_paths
 
 def update_truck_dropdown(file):
-    if file is None:
-        return gr.update(choices=["Upload spreadsheet first"], value=None)
     try:
+        if file is None:
+            return gr.update(choices=["Upload spreadsheet first"], value=None)
         temp_path = safe_save_uploaded_file(file)
         ext = temp_path.suffix.lower()
         if ext == ".csv":
@@ -127,24 +157,40 @@ def update_truck_dropdown(file):
         else:
             return gr.update(choices=["No 'bucket_truck_id' column"], value=None)
     except Exception as e:
-        return gr.update(choices=[f"Error: {e}"], value=None)
+        tb = traceback.format_exc()
+        logger.error(f"update_truck_dropdown error: {e}\n{tb}")
+        return gr.update(choices=[f"Error: {e}\n{tb}"], value=None)
 
 def update_image_dropdown_ui(truck_id, spreadsheet, images_upload):
-    if spreadsheet is None or truck_id is None:
-        return gr.update(choices=[], value=None)
-    temp_path = safe_save_uploaded_file(spreadsheet)
-    df = pd.read_csv(temp_path)
     try:
-        image_filename = df[df["bucket_truck_id"] == truck_id]["image_filename"].values[0]
-    except Exception:
-        image_filename = None
-    available_images = get_image_files(images_upload)
-    matched = image_filename if image_filename in available_images else None
-    return gr.update(choices=available_images, value=matched or (available_images[0] if available_images else None))
+        if spreadsheet is None or truck_id is None:
+            return gr.update(choices=[], value=None)
+        temp_path = safe_save_uploaded_file(spreadsheet)
+        df = pd.read_csv(temp_path)
+        try:
+            image_filename = df[df["bucket_truck_id"] == truck_id]["image_filename"].values[0]
+        except Exception:
+            image_filename = None
+        available_images = get_image_files(images_upload)
+        matched = image_filename if image_filename in available_images else None
+        return gr.update(choices=available_images, value=matched or (available_images[0] if available_images else None))
+    except Exception as e:
+        tb = traceback.format_exc()
+        logger.error(f"update_image_dropdown_ui error: {e}\n{tb}")
+        return gr.update(choices=[f"Error: {e}\n{tb}"], value=None)
 
 def toggle_truck_dropdown(mode):
-    visible = mode == "Single"
-    return gr.update(visible=visible)
+    try:
+        visible = mode == "Single"
+        return gr.update(visible=visible)
+    except Exception as e:
+        tb = traceback.format_exc()
+        logger.error(f"toggle_truck_dropdown error: {e}\n{tb}")
+        return gr.update(visible=True)
+
+def generate_helix_encoder_id():
+    # Generate a unique tracking ID (UUID4 for demo)
+    return f"HelixEncoderID: {uuid.uuid4()}"
 
 def generate_rental_ad(record, contact_phone=None, include_email=False, include_phone=False, kijiji_email=None):
     title = f"{record.get('title', '')} - Now Available for Rent!"
@@ -165,36 +211,53 @@ def generate_rental_ad(record, contact_phone=None, include_email=False, include_
         contact_lines.append(f"📞 Phone: {contact_phone}")
     if contact_lines:
         description += "\n" + "\n".join(contact_lines)
+    # Add helixEncoder tracking id
+    helix_id = generate_helix_encoder_id()
+    description += f"\n\n---\n_{helix_id}_"
     return f"**{title}**\n\n{description}"
 
 def preview_ad(
     truck_id, spreadsheet, images_upload, image_dropdown,
-    contact_phone, include_email, include_phone, kijiji_email
+    contact_phone, include_email, include_phone, kijiji_email, uploaded_image_previews
 ):
-    if spreadsheet is None or truck_id is None:
-        return "Select a truck to preview its ad.", None
-    temp_path = safe_save_uploaded_file(spreadsheet)
-    df = pd.read_csv(temp_path)
-    rec = df[df["bucket_truck_id"] == truck_id]
-    if rec.empty:
-        return "Truck record not found.", None
-    rec = rec.iloc[0].to_dict()
+    try:
+        if spreadsheet is None or truck_id is None:
+            return "Select a truck to preview its ad.", []
+        temp_path = safe_save_uploaded_file(spreadsheet)
+        df = pd.read_csv(temp_path)
+        rec = df[df["bucket_truck_id"] == truck_id]
+        if rec.empty:
+            return "Truck record not found.", []
+        rec = rec.iloc[0].to_dict()
 
-    image_path = None
-    name_to_path, _ = save_uploaded_images(images_upload)
-    if image_dropdown and image_dropdown in name_to_path:
-        image_path = name_to_path[image_dropdown]
+        # Get all images available for preview (uploaded + static)
+        images_to_preview = []
+        name_to_path, errs, debugs, preview_paths = save_uploaded_images(images_upload)
+        # If user selected a specific image, show it first
+        if image_dropdown and image_dropdown in name_to_path:
+            images_to_preview.append(name_to_path[image_dropdown])
+        # Add all images from current upload and static folder (dedup, and only allowed types)
+        for img_path in preview_paths:
+            if img_path not in images_to_preview and is_allowed_image(img_path):
+                images_to_preview.append(img_path)
+        # Add any images already uploaded this session
+        for img_path in uploaded_image_previews or []:
+            if img_path not in images_to_preview and is_allowed_image(img_path):
+                images_to_preview.append(img_path)
 
-    ad_text = generate_rental_ad(
-        rec,
-        contact_phone=contact_phone,
-        include_email=include_email,
-        include_phone=include_phone,
-        kijiji_email=kijiji_email
-    )
-    return ad_text, image_path
+        ad_text = generate_rental_ad(
+            rec,
+            contact_phone=contact_phone,
+            include_email=include_email,
+            include_phone=include_phone,
+            kijiji_email=kijiji_email
+        )
+        return ad_text, images_to_preview
+    except Exception as e:
+        tb = traceback.format_exc()
+        return f"Preview error: {e}\n{tb}", []
 
-def process_ads(email, password, file_obj, images_upload, mode, selected_truck_id, image_dropdown, contact_phone, include_email, include_phone, progress=gr.Progress(track_tqdm=True)):
+def process_ads(email, password, file_obj, images_upload, mode, selected_truck_id, image_dropdown, contact_phone, include_email, include_phone, uploaded_image_previews, progress=gr.Progress(track_tqdm=True)):
     processing_state['is_running'] = True
     processing_state['progress'] = 0.0
     processing_state['current_message'] = 'Starting...'
@@ -210,22 +273,23 @@ def process_ads(email, password, file_obj, images_upload, mode, selected_truck_i
         if (images_upload is None or len(images_upload) == 0) and len(get_static_images()) == 0:
             return "Error: Please upload at least one image or ensure app/assets/images contains images", {"error": "Missing images upload"}, "", 0
         temp_path = safe_save_uploaded_file(file_obj)
-        name_to_path, errs = save_uploaded_images(images_upload)
+        name_to_path, errs, debugs, preview_paths = save_uploaded_images(images_upload)
         if errs:
-            return f"Image upload errors: {'; '.join(errs)}", {"error": "Image upload errors"}, "", 0
+            return f"Image upload errors: {'; '.join(errs)}\nDebug: {'; '.join(debugs)}", {"error": "Image upload errors"}, "", 0
         for pct in range(0, 101, 10):
             import time
-            time.sleep(0.1)
+            time.sleep(0.05)
             processing_state['progress'] = pct
             processing_state['current_message'] = f"Processing... {pct}%"
             progress(pct / 100.0, desc=processing_state['current_message'])
         status_msg = "✅ Processing completed successfully!"
-        logs_dict = {"logs": ["Processing completed successfully!"]}
+        logs_dict = {"logs": ["Processing completed successfully!"] + debugs}
         download_path = ""
         return status_msg, logs_dict, download_path, 100
     except Exception as e:
-        logger.exception(f"Unexpected error in process_ads: {e}")
-        return f"❌ Unexpected error: {str(e)}", {"error": str(e)}, "", processing_state['progress']
+        tb = traceback.format_exc()
+        logger.error(f"process_ads error: {e}\n{tb}")
+        return f"❌ Unexpected error: {str(e)}\n{tb}", {"error": str(e)}, "", processing_state['progress']
     finally:
         processing_state['is_running'] = False
         logger.removeHandler(log_handler)
@@ -260,7 +324,7 @@ def create_ui() -> gr.Blocks:
     - `failed` = posting attempt failed  
 - Use the downloaded sheet to keep track of which trucks have been posted or need retrying.
 
-_Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image formats are JPG, PNG, GIF, and WEBP. Ensure your images directory matches filenames in your spreadsheet._
+_Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image formats are JPG, JPEG, PNG, GIF, and WEBP. Ensure your images directory matches filenames in your spreadsheet._
 """
     with gr.Blocks(title="CaveSheepCollective Kijiji Agent Config", theme=gr.themes.Soft()) as interface:
         gr.Markdown("""
@@ -301,14 +365,21 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                     file_types=[".csv", ".xls", ".xlsx", ".ods"]
                 )
                 images_upload_input = gr.Files(
-                    label="Upload Images (JPG, PNG, GIF, WEBP)",
+                    label="Upload Images (JPG, JPEG, PNG, GIF, WEBP)",
                     file_types=[".jpg", ".jpeg", ".png", ".gif", ".webp"]
                 )
-                upload_result = gr.Textbox(label="Image Upload Status", interactive=False)
+                upload_result = gr.Textbox(label="Image Upload Status (debug)", interactive=False)
+                image_previews = gr.Gallery(label="Uploaded Images Preview", show_label=True, elem_id="image-preview-gallery")
+
+                def upload_and_preview(files):
+                    # Handles upload and updates preview gallery
+                    msg, preview_paths = upload_images_handler(files)
+                    return msg, [[img_path, ""] for img_path in preview_paths]
+
                 images_upload_input.change(
-                    fn=upload_images_handler,
+                    fn=upload_and_preview,
                     inputs=[images_upload_input],
-                    outputs=[upload_result]
+                    outputs=[upload_result, image_previews]
                 )
                 gr.Markdown("### ⚙️ Processing Mode")
                 mode_input = gr.Radio(
@@ -363,9 +434,9 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                     visible=False
                 )
                 gr.Markdown("### 👀 Preview Truck Ad Before Posting")
-                with gr.Row():
-                    ad_preview = gr.Markdown(value="Select a truck to preview its rental ad here.")
-                    image_preview = gr.Image(label="Preview Image", value=None, interactive=False, visible=True, height=320)
+                ad_preview = gr.Markdown(value="Select a truck to preview its rental ad here.")
+                ad_image_previews = gr.Gallery(label="Ad Image Gallery", show_label=True, elem_id="ad-image-gallery")
+
         preview_inputs = [
             truck_id_input,
             spreadsheet_input,
@@ -374,8 +445,10 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
             contact_phone_input,
             include_email_checkbox,
             include_phone_checkbox,
-            email_input
+            email_input,
+            image_previews  # pass the gallery value (list of [path, caption])
         ]
+
         spreadsheet_input.change(
             fn=update_truck_dropdown,
             inputs=[spreadsheet_input],
@@ -396,14 +469,21 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
             inputs=[truck_id_input, spreadsheet_input, images_upload_input],
             outputs=[image_dropdown]
         )
+        # Preview ad content and images
+        def preview_ad_with_gallery(*args):
+            ad_text, image_paths = preview_ad(*args)
+            # gr.Gallery expects list of [path, caption]
+            gallery_items = [[img, ""] for img in image_paths]
+            return ad_text, gallery_items
         for comp in [
             truck_id_input, image_dropdown, contact_phone_input, include_email_checkbox, include_phone_checkbox
         ]:
             comp.change(
-                fn=preview_ad,
+                fn=preview_ad_with_gallery,
                 inputs=preview_inputs,
-                outputs=[ad_preview, image_preview]
+                outputs=[ad_preview, ad_image_previews]
             )
+
         run_button.click(
             fn=process_ads,
             inputs=[
@@ -416,7 +496,8 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                 image_dropdown,
                 contact_phone_input,
                 include_email_checkbox,
-                include_phone_checkbox
+                include_phone_checkbox,
+                image_previews
             ],
             outputs=[
                 status_output,

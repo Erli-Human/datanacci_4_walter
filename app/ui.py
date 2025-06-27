@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from io import StringIO
+import uuid
 
 try:
     from . import data_io, posting, kijiji_bot
@@ -31,20 +32,21 @@ def safe_save_uploaded_file(file_obj):
     Returns the path to the temp file containing the uploaded data.
     """
     temp_dir = Path(tempfile.gettempdir())
-    # Use a unique filename per upload
-    temp_path = temp_dir / f"upload_{int(time.time()*1000)}.csv"
-    # file-like object (has .read)
+    temp_path = temp_dir / f"upload_{uuid.uuid4().hex}.csv"
+    # If it's a file-like object
     if hasattr(file_obj, "read"):
         with open(temp_path, "wb") as out_f:
             out_f.write(file_obj.read())
         return temp_path
-    # Path or NamedString, treat as a path
+    # If it's a path-like or NamedString object, treat as a file path
     file_path = str(getattr(file_obj, "name", file_obj))
     file_path_obj = Path(file_path)
     if file_path_obj.is_file():
         shutil.copy(file_path_obj, temp_path)
         return temp_path
-    raise ValueError("Unsupported file object type or not a file.")
+    if file_path_obj.is_dir():
+        raise ValueError(f"Uploaded path {file_path_obj} is a directory, not a file.")
+    raise ValueError(f"Unsupported file object type or not a file: {file_path_obj}")
 
 def update_truck_dropdown(file):
     if file is None:

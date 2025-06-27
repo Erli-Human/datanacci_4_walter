@@ -37,11 +37,12 @@ def safe_save_uploaded_file(file_obj):
     # If it's a path-like or NamedString object, treat as a file path
     file_path = str(getattr(file_obj, "name", file_obj))
     file_path_obj = Path(file_path)
+    # Strong: fail early if it's a directory (fixes permission denied error)
+    if file_path_obj.is_dir():
+        raise ValueError(f"Uploaded path {file_path_obj} is a directory, not a file.")
     if file_path_obj.is_file():
         shutil.copy(file_path_obj, temp_path)
         return temp_path
-    if file_path_obj.is_dir():
-        raise ValueError(f"Uploaded path {file_path_obj} is a directory, not a file.")
     raise ValueError(f"Unsupported file object type or not a file: {file_path_obj}")
 
 def update_truck_dropdown(file):

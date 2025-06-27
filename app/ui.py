@@ -228,8 +228,6 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                     visible=False
                 )
 
-        # Event handlers
-
         spreadsheet_input.change(
             fn=update_truck_dropdown,
             inputs=[spreadsheet_input],
@@ -260,20 +258,22 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
             ]
         )
 
-        # --- Collapsible instructions and CSV Example at the bottom ---
-        with gr.Accordion("Instructions & CSV Example", open=False):
-            gr.Markdown("## ℹ️ Instructions")
-            gr.Markdown(instructions_markdown)
-            gr.Markdown("## 📝 Truck CSV Example")
-            gr.Markdown("Below is a sample CSV file format for your truck inventory upload. Make sure your spreadsheet (CSV/XLS/XLSX/ODS) matches these columns.")
-            gr.Dataframe(
-                value=pd.read_csv(StringIO(truck_csv_example)),
-                label="Truck CSV Example",
-                interactive=False
-            )
-            gr.Markdown(
-                f"```\n{truck_csv_example}```"
-            )
+        # --- Collapsible instructions and CSV Example at the bottom, both default open ---
+        with gr.Row():
+            with gr.Column():
+                with gr.Accordion("Modes & Spreadsheet Download Instructions", open=True):
+                    gr.Markdown("## ℹ️ Instructions")
+                    gr.Markdown(instructions_markdown)
+                with gr.Accordion("Truck CSV Example", open=False):
+                    gr.Markdown("Below is a sample CSV file format for your truck inventory upload. Make sure your spreadsheet (CSV/XLS/XLSX/ODS) matches these columns.")
+                    gr.Dataframe(
+                        value=pd.read_csv(StringIO(truck_csv_example)),
+                        label="Truck CSV Example",
+                        interactive=False
+                    )
+                    gr.Markdown(
+                        f"```\n{truck_csv_example}```"
+                    )
 
     return interface
 

@@ -4,7 +4,6 @@ import tempfile
 import shutil
 import logging
 from pathlib import Path
-import platform
 from io import StringIO
 import uuid
 import os
@@ -26,8 +25,10 @@ processing_state = {
 }
 
 def safe_save_uploaded_file(file_obj):
+    # Handles single uploaded file and returns a local temp file path
     if hasattr(file_obj, "read"):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="wb") as temp_file:
+        suffix = getattr(file_obj, "name", ".csv")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(suffix).suffix, mode="wb") as temp_file:
             temp_file.write(file_obj.read())
             return Path(temp_file.name)
     file_path = str(getattr(file_obj, "name", file_obj))
@@ -42,9 +43,9 @@ def safe_save_uploaded_file(file_obj):
     raise ValueError(f"Unsupported file object type or not a file: {file_path_obj}")
 
 def get_image_files(images_upload):
+    # Returns the list of image file names from uploaded files
     if images_upload is None or len(images_upload) == 0:
         return []
-    # images_upload is a list of UploadedFile objects
     allowed_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
     files = []
     for img in images_upload:
@@ -70,6 +71,28 @@ def save_uploaded_images(images_upload):
         name_to_path[img_name] = str(img_path)
     return name_to_path, temp_dir
 
+def update_truck_dropdown(file):
+    if file is None:
+        return gr.update(choices=["Upload spreadsheet first"], value=None)
+    try:
+        temp_path = safe_save_uploaded_file(file)
+        ext = temp_path.suffix.lower()
+        if ext == ".csv":
+            df = pd.read_csv(temp_path)
+        elif ext in [".xls", ".xlsx"]:
+            df = pd.read_excel(temp_path)
+        elif ext == ".ods":
+            df = pd.read_excel(temp_path, engine="odf")
+        else:
+            return gr.update(choices=["Unsupported spreadsheet format"], value=None)
+        if "bucket_truck_id" in df.columns:
+            ids = [str(i) for i in df["bucket_truck_id"].dropna().unique()]
+            return gr.update(choices=ids, value=ids[0] if ids else None)
+        else:
+            return gr.update(choices=["No 'bucket_truck_id' column"], value=None)
+    except Exception as e:
+        return gr.update(choices=[f"Error: {e}"], value=None)
+
 def update_image_dropdown_ui(truck_id, spreadsheet, images_upload):
     if spreadsheet is None or truck_id is None:
         return gr.update(choices=[], value=None)
@@ -87,7 +110,7 @@ def toggle_truck_dropdown(mode):
     visible = mode == "Single"
     return gr.update(visible=visible)
 
-def generate_rental_ad(record, image_url=None, contact_phone=None, include_email=False, include_phone=False, kijiji_email=None):
+def generate_rental_ad(record, contact_phone=None, include_email=False, include_phone=False, kijiji_email=None):
     title = f"{record.get('title', '')} - Now Available for Rent!"
     description = f"{record.get('description', '')}\n\n"
     description += f"**Rental Details:**\n"
@@ -128,7 +151,6 @@ def preview_ad(
 
     ad_text = generate_rental_ad(
         rec,
-        image_url=None,
         contact_phone=contact_phone,
         include_email=include_email,
         include_phone=include_phone,
@@ -152,7 +174,6 @@ def process_ads(email, password, file_obj, images_upload, mode, selected_truck_i
         if not images_upload or len(images_upload) == 0:
             return "Error: Please upload at least one image", {"error": "Missing images upload"}, "", 0
         temp_path = safe_save_uploaded_file(file_obj)
-        # Save images to temp dir
         name_to_path, temp_dir = save_uploaded_images(images_upload)
         for pct in range(0, 101, 10):
             import time

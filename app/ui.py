@@ -26,19 +26,22 @@ processing_state = {
 }
 
 def safe_save_uploaded_file(file_obj):
-    temp_dir = Path(tempfile.gettempdir())
-    temp_path = temp_dir / f"upload_{uuid.uuid4().hex}.csv"
+    # rewritten to use NamedTemporaryFile for guaranteed file write permissions
+    import io
     if hasattr(file_obj, "read"):
-        with open(temp_path, "wb") as out_f:
-            out_f.write(file_obj.read())
-        return temp_path
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="wb")
+        temp_file.write(file_obj.read())
+        temp_file.close()
+        return Path(temp_file.name)
     file_path = str(getattr(file_obj, "name", file_obj))
     file_path_obj = Path(file_path)
     if file_path_obj.is_dir():
         raise ValueError(f"Uploaded path {file_path_obj} is a directory, not a file.")
     if file_path_obj.is_file() and os.access(file_path_obj, os.R_OK):
-        shutil.copy(file_path_obj, temp_path)
-        return temp_path
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_path_obj.suffix, mode="wb")
+        with open(file_path_obj, "rb") as src, open(temp_file.name, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        return Path(temp_file.name)
     raise ValueError(f"Unsupported file object type or not a file: {file_path_obj}")
 
 def get_image_files(images_dir):
@@ -91,7 +94,6 @@ def get_progress_info():
     return processing_state['progress'], processing_state['current_message']
 
 def generate_rental_ad(record, image_url=None):
-    # Compose ad using all details from the record, focusing on rental
     title = f"{record.get('title', '')} - Now Available for Rent!"
     description = f"{record.get('description', '')}\n\n"
     description += f"**Rental Details:**\n"
@@ -293,7 +295,6 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
             inputs=[truck_id_input, spreadsheet_input, images_dir_input],
             outputs=[image_dropdown]
         )
-        # Preview when truck, spreadsheet, image changes
         truck_id_input.change(
             fn=preview_ad,
             inputs=[truck_id_input, spreadsheet_input, images_dir_input, image_dropdown],
@@ -341,8 +342,7 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
 
 def launch_ui(server_name: str = "127.0.0.1", server_port: int = 7860, share: bool = False) -> None:
     interface = create_ui()
-    print(f"🚀 Launching the Datanacci Kijiji Posting Agent...")
-     print(f"🚀 Connecting to datanacci.blockchain(node908234)Agent routed.")
+    print(f"🚀 Launching Kijiji Posting Assistant...")
     print(f"📍 URL: http://{server_name}:{server_port}")
     interface.launch(
         server_name=server_name,

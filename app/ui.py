@@ -24,19 +24,14 @@ processing_state = {
     'logs': []
 }
 
-# Use a Gradio-friendly, user-writable temp directory for any file handling
-GRADIO_TEMP_ROOT = Path(tempfile.gettempdir()) / "gradio_kijiji_uploads"
-GRADIO_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
-
 ASSETS_IMAGE_DIR = Path("app/assets/images")
+ASSETS_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 def safe_save_uploaded_file(file_obj):
     # Handles single uploaded file and returns a local temp file path (in a safe, writable temp directory)
     if hasattr(file_obj, "read"):
         suffix = getattr(file_obj, "name", ".csv")
-        tmp_dir = GRADIO_TEMP_ROOT
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(delete=False, dir=tmp_dir, suffix=Path(suffix).suffix, mode="wb") as temp_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(suffix).suffix, mode="wb") as temp_file:
             temp_file.write(file_obj.read())
             return Path(temp_file.name)
     file_path = str(getattr(file_obj, "name", file_obj))
@@ -44,9 +39,7 @@ def safe_save_uploaded_file(file_obj):
     if file_path_obj.is_dir():
         raise ValueError(f"Uploaded path {file_path_obj} is a directory, not a file.")
     if file_path_obj.is_file() and os.access(file_path_obj, os.R_OK):
-        tmp_dir = GRADIO_TEMP_ROOT
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(delete=False, dir=tmp_dir, suffix=file_path_obj.suffix, mode="wb") as temp_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_path_obj.suffix, mode="wb") as temp_file:
             with open(file_path_obj, "rb") as src:
                 shutil.copyfileobj(src, temp_file)
             return Path(temp_file.name)
@@ -61,8 +54,36 @@ def get_static_images():
                 images.append(f.name)
     return images
 
+def save_uploaded_images(images_upload):
+    # Save all uploaded images to app/assets/images, return mapping {name: path}, handle errors, allow multi-upload
+    allowed_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+    name_to_path = {}
+    error_msgs = []
+    if images_upload is not None:
+        for img in images_upload:
+            img_name = Path(getattr(img, "name", uuid.uuid4().hex + ".img")).name
+            img_name = img_name.replace("..", "").replace("\\", "_").replace("/", "_")
+            ext = Path(img_name).suffix.lower()
+            if ext not in allowed_exts:
+                error_msgs.append(f"File '{img_name}' has unsupported extension.")
+                continue
+            img_path = ASSETS_IMAGE_DIR / img_name
+            try:
+                img.seek(0)
+                with open(img_path, "wb") as out_f:
+                    out_f.write(img.read())
+                name_to_path[img_name] = str(img_path.resolve())
+            except Exception as e:
+                logger.error(f"Error saving uploaded image {img_name}: {e}")
+                error_msgs.append(f"Error saving '{img_name}': {e}")
+    # Also return static images already in assets/images
+    for static_img in get_static_images():
+        static_path = ASSETS_IMAGE_DIR / static_img
+        name_to_path[static_img] = str(static_path.resolve())
+    return name_to_path, error_msgs
+
 def get_image_files(images_upload):
-    # Returns the list of image file names from uploaded files
+    # Returns the list of image file names from uploaded files and from app/assets/images
     files = []
     allowed_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
     if images_upload is not None:
@@ -79,31 +100,12 @@ def get_image_files(images_upload):
             files.append(name)
     return files
 
-def save_uploaded_images(images_upload):
-    # Save all uploaded images to a safe temp directory and return mapping {name: path}
-    temp_dir = GRADIO_TEMP_ROOT / f"images_{uuid.uuid4().hex}"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    name_to_path = {}
-
-    # Uploaded files
-    if images_upload is not None:
-        for img in images_upload:
-            img_name = Path(getattr(img, "name", uuid.uuid4().hex + ".img")).name
-            # Prevent path traversal or invalid filenames
-            img_name = img_name.replace("..", "").replace("\\", "_").replace("/", "_")
-            img_path = temp_dir / img_name
-            try:
-                img.seek(0)
-                with open(img_path, "wb") as out_f:
-                    out_f.write(img.read())
-                name_to_path[img_name] = str(img_path)
-            except Exception as e:
-                logger.error(f"Error saving uploaded image {img_name}: {e}")
-    # Add static images from assets directory
-    for static_img in get_static_images():
-        static_path = ASSETS_IMAGE_DIR / static_img
-        name_to_path[static_img] = str(static_path.resolve())
-    return name_to_path, temp_dir
+def upload_images_handler(files):
+    # Handles the upload event for multi-files, stores to app/assets/images, returns success/error message
+    _, errs = save_uploaded_images(files)
+    if errs:
+        return f"Errors:\n" + "\n".join(errs)
+    return "Images uploaded successfully!"
 
 def update_truck_dropdown(file):
     if file is None:
@@ -208,7 +210,9 @@ def process_ads(email, password, file_obj, images_upload, mode, selected_truck_i
         if (images_upload is None or len(images_upload) == 0) and len(get_static_images()) == 0:
             return "Error: Please upload at least one image or ensure app/assets/images contains images", {"error": "Missing images upload"}, "", 0
         temp_path = safe_save_uploaded_file(file_obj)
-        name_to_path, temp_dir = save_uploaded_images(images_upload)
+        name_to_path, errs = save_uploaded_images(images_upload)
+        if errs:
+            return f"Image upload errors: {'; '.join(errs)}", {"error": "Image upload errors"}, "", 0
         for pct in range(0, 101, 10):
             import time
             time.sleep(0.1)
@@ -299,6 +303,12 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                 images_upload_input = gr.Files(
                     label="Upload Images (JPG, PNG, GIF, WEBP)",
                     file_types=[".jpg", ".jpeg", ".png", ".gif", ".webp"]
+                )
+                upload_result = gr.Textbox(label="Image Upload Status", interactive=False)
+                images_upload_input.change(
+                    fn=upload_images_handler,
+                    inputs=[images_upload_input],
+                    outputs=[upload_result]
                 )
                 gr.Markdown("### ⚙️ Processing Mode")
                 mode_input = gr.Radio(

@@ -3,12 +3,12 @@ import pandas as pd
 import threading
 import time
 import tempfile
+import shutil
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from io import StringIO
 
-# Import the app modules
 try:
     from . import data_io, posting, kijiji_bot
 except ImportError:
@@ -25,23 +25,32 @@ processing_state = {
     'logs': []
 }
 
-def safe_path(filename: str) -> Path:
-    safe_dir = Path(tempfile.gettempdir())
-    base = Path(filename).name
-    return safe_dir / base
+def safe_save_uploaded_file(file_obj):
+    """
+    Accepts either a file-like object or a path-like object (str, Path, NamedString).
+    Returns the path to the temp file containing the uploaded data.
+    """
+    temp_dir = Path(tempfile.gettempdir())
+    # Use a unique filename per upload
+    temp_path = temp_dir / f"upload_{int(time.time()*1000)}.csv"
+    # file-like object (has .read)
+    if hasattr(file_obj, "read"):
+        with open(temp_path, "wb") as out_f:
+            out_f.write(file_obj.read())
+        return temp_path
+    # Path or NamedString, treat as a path
+    file_path = str(getattr(file_obj, "name", file_obj))
+    file_path_obj = Path(file_path)
+    if file_path_obj.is_file():
+        shutil.copy(file_path_obj, temp_path)
+        return temp_path
+    raise ValueError("Unsupported file object type or not a file.")
 
 def update_truck_dropdown(file):
     if file is None:
         return gr.update(choices=["Upload spreadsheet first"], value=None)
     try:
-        if hasattr(file, "name"):
-            temp_path = safe_path(file.name)
-            with open(temp_path, "wb") as out_f:
-                out_f.write(file.read())
-        else:
-            temp_path = safe_path(str(file))
-            with open(temp_path, "wb") as out_f:
-                out_f.write(file.read())
+        temp_path = safe_save_uploaded_file(file)
         ext = temp_path.suffix.lower()
         if ext == ".csv":
             df = pd.read_csv(temp_path)
@@ -84,14 +93,7 @@ def process_ads(email: str, password: str, file_obj: Optional[str], images_dir: 
         if not images_dir:
             return "Error: Please specify images directory", {"error": "Missing images directory"}, "", 0
         
-        if hasattr(file_obj, "name"):
-            temp_path = safe_path(file_obj.name)
-            with open(temp_path, "wb") as out_f:
-                out_f.write(file_obj.read())
-        else:
-            temp_path = safe_path(str(file_obj))
-            with open(temp_path, "wb") as out_f:
-                out_f.write(file_obj.read())
+        temp_path = safe_save_uploaded_file(file_obj)
 
         for pct in range(0, 101, 10):
             time.sleep(0.1)

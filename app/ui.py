@@ -24,11 +24,17 @@ processing_state = {
     'logs': []
 }
 
+# Use a Gradio-friendly, user-writable temp directory for any file handling
+GRADIO_TEMP_ROOT = Path(tempfile.gettempdir()) / "gradio_kijiji_uploads"
+GRADIO_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+
 def safe_save_uploaded_file(file_obj):
-    # Handles single uploaded file and returns a local temp file path
+    # Handles single uploaded file and returns a local temp file path (in a safe, writable temp directory)
     if hasattr(file_obj, "read"):
         suffix = getattr(file_obj, "name", ".csv")
-        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(suffix).suffix, mode="wb") as temp_file:
+        tmp_dir = GRADIO_TEMP_ROOT
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(delete=False, dir=tmp_dir, suffix=Path(suffix).suffix, mode="wb") as temp_file:
             temp_file.write(file_obj.read())
             return Path(temp_file.name)
     file_path = str(getattr(file_obj, "name", file_obj))
@@ -36,7 +42,9 @@ def safe_save_uploaded_file(file_obj):
     if file_path_obj.is_dir():
         raise ValueError(f"Uploaded path {file_path_obj} is a directory, not a file.")
     if file_path_obj.is_file() and os.access(file_path_obj, os.R_OK):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_path_obj.suffix, mode="wb") as temp_file:
+        tmp_dir = GRADIO_TEMP_ROOT
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(delete=False, dir=tmp_dir, suffix=file_path_obj.suffix, mode="wb") as temp_file:
             with open(file_path_obj, "rb") as src:
                 shutil.copyfileobj(src, temp_file)
             return Path(temp_file.name)
@@ -57,14 +65,17 @@ def get_image_files(images_upload):
     return files
 
 def save_uploaded_images(images_upload):
-    # Save all uploaded images to a temp directory and return mapping {name: path}
+    # Save all uploaded images to a safe temp directory and return mapping {name: path}
     if images_upload is None or len(images_upload) == 0:
         return {}, None
-    temp_dir = tempfile.mkdtemp(prefix="kijiji_images_")
+    temp_dir = GRADIO_TEMP_ROOT / f"images_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
     name_to_path = {}
     for img in images_upload:
         img_name = Path(getattr(img, "name", uuid.uuid4().hex + ".img")).name
-        img_path = Path(temp_dir) / img_name
+        # Prevent path traversal or invalid filenames
+        img_name = img_name.replace("..", "").replace("\\", "_").replace("/", "_")
+        img_path = temp_dir / img_name
         img.seek(0)
         with open(img_path, "wb") as out_f:
             out_f.write(img.read())
@@ -322,7 +333,6 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                 with gr.Row():
                     ad_preview = gr.Markdown(value="Select a truck to preview its rental ad here.")
                     image_preview = gr.Image(label="Preview Image", value=None, interactive=False, visible=True, height=320)
-        # Dropdown and preview update triggers
         preview_inputs = [
             truck_id_input,
             spreadsheet_input,

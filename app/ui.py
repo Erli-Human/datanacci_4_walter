@@ -32,7 +32,7 @@ def safe_path(filename: str) -> Path:
 
 def update_truck_dropdown(file):
     if file is None:
-        return gr.Dropdown.update(choices=["Upload spreadsheet first"], value=None)
+        return gr.update(choices=["Upload spreadsheet first"], value=None)
     try:
         if hasattr(file, "name"):
             temp_path = safe_path(file.name)
@@ -50,18 +50,18 @@ def update_truck_dropdown(file):
         elif ext == ".ods":
             df = pd.read_excel(temp_path, engine="odf")
         else:
-            return gr.Dropdown.update(choices=["Unsupported spreadsheet format"], value=None)
+            return gr.update(choices=["Unsupported spreadsheet format"], value=None)
         if "bucket_truck_id" in df.columns:
             ids = [str(i) for i in df["bucket_truck_id"].dropna().unique()]
-            return gr.Dropdown.update(choices=ids, value=ids[0] if ids else None)
+            return gr.update(choices=ids, value=ids[0] if ids else None)
         else:
-            return gr.Dropdown.update(choices=["No 'bucket_truck_id' column"], value=None)
+            return gr.update(choices=["No 'bucket_truck_id' column"], value=None)
     except Exception as e:
-        return gr.Dropdown.update(choices=[f"Error: {e}"], value=None)
+        return gr.update(choices=[f"Error: {e}"], value=None)
 
 def toggle_truck_dropdown(mode):
     visible = mode == "Single"
-    return gr.Dropdown.update(visible=visible)
+    return gr.update(visible=visible)
 
 def get_progress_info() -> Tuple[float, str]:
     return processing_state['progress'], processing_state['current_message']

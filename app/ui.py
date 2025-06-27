@@ -120,9 +120,11 @@ def process_ads(email: str, password: str, file_obj: Optional[str], images_dir: 
 def create_ui() -> gr.Blocks:
     truck_csv_example = (
         "bucket_truck_id,image_filename,title,description,price,tags,fuel_type,equipment_type,posting_status\n"
-        "BT001,truck1.jpg,Test Truck 1,Description 1,45000,test,truck,diesel,bucket truck,pending\n"
-        "BT002,truck2.jpg,Test Truck 2,Description 2,38000,test,vehicle,gasoline,utility truck,\n"
-        "BT003,truck3.jpg,Test Truck 3,Description 3,52000,test,equipment,diesel,service truck,pending\n"
+        "2024FORDF350XLWHITE123,fordf350xl_white_123.jpg,Ford F-350 XL White,White 2024 Ford F-350 XL,55000,utility,gasoline,utility truck,pending\n"
+        "2023CHEVG2500SILVER789,chevg2500_silver_789.jpg,Chevy G2500 Silver,Silver 2023 Chevy G2500 with lift gate,43000,delivery,gasoline,van,posted\n"
+        "2022RAM5500DUMP456,ram5500_dump_456.jpg,RAM 5500 Dump,RAM 5500 2022 with dump body and toolboxes,67500,construction,diesel,dump truck,failed\n"
+        "2024HINO338BOX001,hino338_box_001.jpg,Hino 338 Box Truck,Hino 338 2024 box truck with liftgate,72000,box,lpg,box truck,pending\n"
+        "2019ISUZUNPRHDRED555,isuzunprhd_red_555.jpg,Isuzu NPR-HD Red,Red Isuzu NPR-HD 2019,34000,light,gasoline,flatbed truck,pending\n"
     )
     instructions_markdown = """
 **Single Mode:**  

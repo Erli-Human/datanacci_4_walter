@@ -258,10 +258,10 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
             ]
         )
 
-        # --- Collapsible instructions and CSV Example at the bottom, both default open ---
+        # --- Collapsible instructions and CSV Example at the bottom, both default closed ---
         with gr.Row():
             with gr.Column():
-                with gr.Accordion("Modes & Spreadsheet Download Instructions", open=True):
+                with gr.Accordion("Modes & Spreadsheet Download Instructions", open=False):
                     gr.Markdown("## ℹ️ Instructions")
                     gr.Markdown(instructions_markdown)
                 with gr.Accordion("Truck CSV Example", open=False):

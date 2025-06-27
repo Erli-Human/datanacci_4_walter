@@ -341,7 +341,8 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
 
 def launch_ui(server_name: str = "127.0.0.1", server_port: int = 7860, share: bool = False) -> None:
     interface = create_ui()
-    print(f"🚀 Launching Kijiji Posting Assistant...")
+    print(f"🚀 Launching the Datanacci Kijiji Posting Agent...")
+     print(f"🚀 Connecting to datanacci.blockchain(node908234)Agent routed.")
     print(f"📍 URL: http://{server_name}:{server_port}")
     interface.launch(
         server_name=server_name,

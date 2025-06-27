@@ -1,14 +1,13 @@
 import gradio as gr
 import pandas as pd
-import threading
-import time
 import tempfile
 import shutil
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Optional
 from io import StringIO
 import uuid
+import os
 
 try:
     from . import data_io, posting, kijiji_bot
@@ -29,21 +28,25 @@ processing_state = {
 def safe_save_uploaded_file(file_obj):
     temp_dir = Path(tempfile.gettempdir())
     temp_path = temp_dir / f"upload_{uuid.uuid4().hex}.csv"
-    # If it's a file-like object
     if hasattr(file_obj, "read"):
         with open(temp_path, "wb") as out_f:
             out_f.write(file_obj.read())
         return temp_path
-    # If it's a path-like or NamedString object, treat as a file path
     file_path = str(getattr(file_obj, "name", file_obj))
     file_path_obj = Path(file_path)
-    # Strong: fail early if it's a directory (fixes permission denied error)
     if file_path_obj.is_dir():
         raise ValueError(f"Uploaded path {file_path_obj} is a directory, not a file.")
-    if file_path_obj.is_file():
+    if file_path_obj.is_file() and os.access(file_path_obj, os.R_OK):
         shutil.copy(file_path_obj, temp_path)
         return temp_path
     raise ValueError(f"Unsupported file object type or not a file: {file_path_obj}")
+
+def get_image_files(images_dir):
+    allowed_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+    dir_path = Path(images_dir)
+    if not dir_path.exists() or not dir_path.is_dir():
+        return []
+    return [f.name for f in dir_path.iterdir() if f.is_file() and f.suffix.lower() in allowed_exts]
 
 def update_truck_dropdown(file):
     if file is None:
@@ -67,15 +70,27 @@ def update_truck_dropdown(file):
     except Exception as e:
         return gr.update(choices=[f"Error: {e}"], value=None)
 
+def update_image_dropdown_ui(truck_id, spreadsheet, images_dir):
+    if spreadsheet is None or truck_id is None:
+        return gr.update(choices=[], value=None)
+    temp_path = safe_save_uploaded_file(spreadsheet)
+    df = pd.read_csv(temp_path)
+    try:
+        image_filename = df[df["bucket_truck_id"] == truck_id]["image_filename"].values[0]
+    except Exception:
+        image_filename = None
+    available_images = get_image_files(images_dir)
+    matched = image_filename if image_filename in available_images else None
+    return gr.update(choices=available_images, value=matched or (available_images[0] if available_images else None))
+
 def toggle_truck_dropdown(mode):
     visible = mode == "Single"
     return gr.update(visible=visible)
 
-def get_progress_info() -> Tuple[float, str]:
+def get_progress_info():
     return processing_state['progress'], processing_state['current_message']
 
-def process_ads(email: str, password: str, file_obj: Optional[str], images_dir: str, 
-               mode: str, selected_truck_id: Optional[str], progress=gr.Progress(track_tqdm=True)):
+def process_ads(email, password, file_obj, images_dir, mode, selected_truck_id, selected_image, progress=gr.Progress(track_tqdm=True)):
     processing_state['is_running'] = True
     processing_state['progress'] = 0.0
     processing_state['current_message'] = 'Starting...'
@@ -83,7 +98,6 @@ def process_ads(email: str, password: str, file_obj: Optional[str], images_dir: 
 
     log_handler = logging.StreamHandler()
     logger.addHandler(log_handler)
-
     try:
         if not email or not password:
             return "Error: Email and password are required", {"error": "Missing credentials"}, "", 0
@@ -91,25 +105,20 @@ def process_ads(email: str, password: str, file_obj: Optional[str], images_dir: 
             return "Error: Please upload a spreadsheet", {"error": "Missing spreadsheet"}, "", 0
         if not images_dir:
             return "Error: Please specify images directory", {"error": "Missing images directory"}, "", 0
-        
         temp_path = safe_save_uploaded_file(file_obj)
-
         for pct in range(0, 101, 10):
+            import time
             time.sleep(0.1)
             processing_state['progress'] = pct
             processing_state['current_message'] = f"Processing... {pct}%"
             progress(pct / 100.0, desc=processing_state['current_message'])
-        
         status_msg = "✅ Processing completed successfully!"
         logs_dict = {"logs": ["Processing completed successfully!"]}
         download_path = ""
-
         return status_msg, logs_dict, download_path, 100
-
     except Exception as e:
         logger.exception(f"Unexpected error in process_ads: {e}")
         return f"❌ Unexpected error: {str(e)}", {"error": str(e)}, "", processing_state['progress']
-    
     finally:
         processing_state['is_running'] = False
         logger.removeHandler(log_handler)
@@ -150,7 +159,6 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
 
         Automate posting of bucket truck listings to Kijiji with support for single posting and batch processing.
         """)
-
         with gr.Row():
             with gr.Column(scale=1):
                 gr.Markdown("### 🔐 Credentials")
@@ -164,7 +172,6 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                     placeholder="Your password",
                     type="password"
                 )
-
                 gr.Markdown("### 📁 Files & Directories")
                 spreadsheet_input = gr.File(
                     label="Upload Spreadsheet (CSV, XLS, XLSX, ODS)",
@@ -176,7 +183,6 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                     value="assets/images",
                     info="Supported image types: JPG, PNG, GIF, WEBP"
                 )
-
                 gr.Markdown("### ⚙️ Processing Mode")
                 mode_input = gr.Radio(
                     choices=["Single", "Batch-New", "Batch-All"],
@@ -184,14 +190,18 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                     value="Single",
                     info="Single: Post one record | Batch-New: Post pending/failed only | Batch-All: Post everything"
                 )
-
                 truck_id_input = gr.Dropdown(
                     label="Select Truck ID",
                     choices=["Upload spreadsheet first"],
                     visible=True,
                     info="Available when Single mode is selected"
                 )
-
+                image_dropdown = gr.Dropdown(
+                    label="Select Image for Truck",
+                    choices=[],
+                    visible=True,
+                    info="Images in selected directory"
+                )
                 with gr.Row():
                     run_button = gr.Button(
                         "🚀 Run Processing",
@@ -204,45 +214,47 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                         size="lg",
                         visible=False
                     )
-
             with gr.Column(scale=2):
                 gr.Markdown("### 📊 Progress & Logs")
-
                 status_output = gr.Textbox(
                     label="Status",
                     value="Ready to process",
                     interactive=False
                 )
-
                 progress_output = gr.Number(
                     label="Progress (%)",
                     value=0,
                     interactive=False
                 )
-
                 logs_output = gr.JSON(
                     label="Live Logs",
                     value={"logs": []}
                 )
-
                 gr.Markdown("### 📥 Download Updated Spreadsheet")
                 download_file = gr.File(
                     label="Download Updated Spreadsheet",
                     visible=False
                 )
-
         spreadsheet_input.change(
             fn=update_truck_dropdown,
             inputs=[spreadsheet_input],
             outputs=[truck_id_input]
         )
-
         mode_input.change(
             fn=toggle_truck_dropdown,
             inputs=[mode_input],
             outputs=[truck_id_input]
         )
-
+        truck_id_input.change(
+            fn=update_image_dropdown_ui,
+            inputs=[truck_id_input, spreadsheet_input, images_dir_input],
+            outputs=[image_dropdown]
+        )
+        images_dir_input.change(
+            fn=update_image_dropdown_ui,
+            inputs=[truck_id_input, spreadsheet_input, images_dir_input],
+            outputs=[image_dropdown]
+        )
         run_button.click(
             fn=process_ads,
             inputs=[
@@ -251,7 +263,8 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                 spreadsheet_input,
                 images_dir_input,
                 mode_input,
-                truck_id_input
+                truck_id_input,
+                image_dropdown
             ],
             outputs=[
                 status_output,
@@ -260,8 +273,6 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                 progress_output
             ]
         )
-
-        # --- Collapsible instructions and CSV Example at the bottom, both default closed ---
         with gr.Row():
             with gr.Column():
                 with gr.Accordion("Modes & Spreadsheet Download Instructions", open=False):
@@ -277,7 +288,6 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                     gr.Markdown(
                         f"```\n{truck_csv_example}```"
                     )
-
     return interface
 
 def launch_ui(server_name: str = "127.0.0.1", server_port: int = 7860, share: bool = False) -> None:

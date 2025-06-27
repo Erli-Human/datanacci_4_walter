@@ -90,6 +90,38 @@ def toggle_truck_dropdown(mode):
 def get_progress_info():
     return processing_state['progress'], processing_state['current_message']
 
+def generate_rental_ad(record, image_url=None):
+    # Compose ad using all details from the record, focusing on rental
+    title = f"{record.get('title', '')} - Now Available for Rent!"
+    description = f"{record.get('description', '')}\n\n"
+    description += f"**Rental Details:**\n"
+    description += f"• Price: ${record.get('price', 'N/A')} per day\n"
+    description += f"• Equipment Type: {record.get('equipment_type', 'N/A')}\n"
+    description += f"• Fuel Type: {record.get('fuel_type', 'N/A')}\n"
+    description += f"• VIN: {record.get('vin_id', 'N/A')}\n"
+    description += f"• Tags: {record.get('tags', '')}\n"
+    description += f"• Status: {record.get('posting_status', '')}\n"
+    if image_url:
+        description += f"\n![Truck Image]({image_url})\n"
+    description += "\nContact us now to reserve this vehicle for your next project!"
+    return f"**{title}**\n\n{description}"
+
+def preview_ad(truck_id, spreadsheet, images_dir, selected_image):
+    if spreadsheet is None or truck_id is None:
+        return "Select a truck to preview its ad."
+    temp_path = safe_save_uploaded_file(spreadsheet)
+    df = pd.read_csv(temp_path)
+    rec = df[df["bucket_truck_id"] == truck_id]
+    if rec.empty:
+        return "Truck record not found."
+    rec = rec.iloc[0].to_dict()
+    image_url = None
+    if selected_image:
+        image_path = Path(images_dir) / selected_image
+        if image_path.exists():
+            image_url = image_path.as_posix()
+    return generate_rental_ad(rec, image_url=image_url)
+
 def process_ads(email, password, file_obj, images_dir, mode, selected_truck_id, selected_image, progress=gr.Progress(track_tqdm=True)):
     processing_state['is_running'] = True
     processing_state['progress'] = 0.0
@@ -237,6 +269,10 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                     label="Download Updated Spreadsheet",
                     visible=False
                 )
+                gr.Markdown("### 👀 Preview Truck Ad Before Posting")
+                ad_preview = gr.Markdown(
+                    value="Select a truck to preview its rental ad here."
+                )
         spreadsheet_input.change(
             fn=update_truck_dropdown,
             inputs=[spreadsheet_input],
@@ -256,6 +292,17 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
             fn=update_image_dropdown_ui,
             inputs=[truck_id_input, spreadsheet_input, images_dir_input],
             outputs=[image_dropdown]
+        )
+        # Preview when truck, spreadsheet, image changes
+        truck_id_input.change(
+            fn=preview_ad,
+            inputs=[truck_id_input, spreadsheet_input, images_dir_input, image_dropdown],
+            outputs=[ad_preview]
+        )
+        image_dropdown.change(
+            fn=preview_ad,
+            inputs=[truck_id_input, spreadsheet_input, images_dir_input, image_dropdown],
+            outputs=[ad_preview]
         )
         run_button.click(
             fn=process_ads,

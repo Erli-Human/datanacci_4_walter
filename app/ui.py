@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from io import StringIO
 import uuid
+import re
 
 try:
     from . import data_io, posting, kijiji_bot
@@ -26,22 +27,32 @@ processing_state = {
     'logs': []
 }
 
+def sanitize_filename(filename: str) -> str:
+    # Remove path parts and allow only safe characters
+    basename = Path(filename).name
+    return re.sub(r'[^A-Za-z0-9.\-_]', '_', basename)
+
 def safe_save_uploaded_file(file_obj):
-    """
-    Accepts either a file-like object or a path-like object (str, Path, NamedString).
-    Returns the path to the temp file containing the uploaded data.
-    """
     temp_dir = Path(tempfile.gettempdir())
-    temp_path = temp_dir / f"upload_{uuid.uuid4().hex}.csv"
-    # If it's a file-like object
+    safe_base = "upload_%s.csv" % uuid.uuid4().hex
+    temp_path = temp_dir / sanitize_filename(safe_base)
+    # File-like object (from gr.File)
     if hasattr(file_obj, "read"):
         with open(temp_path, "wb") as out_f:
             out_f.write(file_obj.read())
         return temp_path
-    # If it's a path-like or NamedString object, treat as a file path
+    # Path-like object, check that it is a file, and restrict to temp/cwd
     file_path = str(getattr(file_obj, "name", file_obj))
     file_path_obj = Path(file_path)
     if file_path_obj.is_file():
+        # Only allow files within tempfile.gettempdir() or cwd
+        try:
+            file_path_obj_abs = file_path_obj.resolve(strict=True)
+            allowed_dirs = [temp_dir.resolve(), Path.cwd().resolve()]
+            if not any(str(file_path_obj_abs).startswith(str(ad)) for ad in allowed_dirs):
+                raise ValueError("Unsafe file path detected.")
+        except Exception:
+            raise ValueError("Invalid or unsafe file path.")
         shutil.copy(file_path_obj, temp_path)
         return temp_path
     if file_path_obj.is_dir():
@@ -119,12 +130,12 @@ def process_ads(email: str, password: str, file_obj: Optional[str], images_dir: 
 
 def create_ui() -> gr.Blocks:
     truck_csv_example = (
-        "bucket_truck_id,image_filename,title,description,price,tags,fuel_type,equipment_type,posting_status\n"
-        "2024FORDF350XLWHITE123,fordf350xl_white_123.jpg,Ford F-350 XL White,White 2024 Ford F-350 XL,55000,utility,gasoline,utility truck,pending\n"
-        "2023CHEVG2500SILVER789,chevg2500_silver_789.jpg,Chevy G2500 Silver,Silver 2023 Chevy G2500 with lift gate,43000,delivery,gasoline,van,posted\n"
-        "2022RAM5500DUMP456,ram5500_dump_456.jpg,RAM 5500 Dump,RAM 5500 2022 with dump body and toolboxes,67500,construction,diesel,dump truck,failed\n"
-        "2024HINO338BOX001,hino338_box_001.jpg,Hino 338 Box Truck,Hino 338 2024 box truck with liftgate,72000,box,lpg,box truck,pending\n"
-        "2019ISUZUNPRHDRED555,isuzunprhd_red_555.jpg,Isuzu NPR-HD Red,Red Isuzu NPR-HD 2019,34000,light,gasoline,flatbed truck,pending\n"
+        "bucket_truck_id,vin_id,image_filename,title,description,price,tags,fuel_type,equipment_type,posting_status\n"
+        "2024FORDF350XLWHITE123,1FT8W3BT4JEC12345,fordf350xl_white_123.jpg,Ford F-350 XL White,White 2024 Ford F-350 XL,55000,utility,gasoline,utility truck,pending\n"
+        "2023CHEVG2500SILVER789,1GCWGFCF1F1189789,chevg2500_silver_789.jpg,Chevy G2500 Silver,Silver 2023 Chevy G2500 with lift gate,43000,delivery,gasoline,van,posted\n"
+        "2022RAM5500DUMP456,3C7WRNFL8NG204456,ram5500_dump_456.jpg,RAM 5500 Dump,RAM 5500 2022 with dump body and toolboxes,67500,construction,diesel,dump truck,failed\n"
+        "2024HINO338BOX001,2AYNC8JV8R3S90001,hino338_box_001.jpg,Hino 338 Box Truck,Hino 338 2024 box truck with liftgate,72000,box,lpg,box truck,pending\n"
+        "2019ISUZUNPRHDRED555,JALE5W163K7905555,isuzunprhd_red_555.jpg,Isuzu NPR-HD Red,Red Isuzu NPR-HD 2019,34000,light,gasoline,flatbed truck,pending\n"
     )
     instructions_markdown = """
 **Single Mode:**  

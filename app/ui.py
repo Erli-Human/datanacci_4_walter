@@ -139,9 +139,11 @@ def create_ui() -> gr.Blocks:
 **Batch-New Mode:**  
 - Posts all listings in your spreadsheet which have a `posting_status` column that is blank or marked as `pending` or `failed`.  
 - Skips any listings already marked as `posted` or otherwise completed.
+- **Note:** In Batch and Batch-New mode, `vin_id` must correctly map to the image filename (e.g., `vin_id.jpg`) in your images directory.
 
 **Batch-All Mode:**  
 - Posts (or re-posts) all listings in your spreadsheet, regardless of their current `posting_status`.
+- **Note:** In Batch and Batch-New mode, `vin_id` must correctly map to the image filename (e.g., `vin_id.jpg`) in your images directory.
 
 **Spreadsheet Download:**  
 - After processing, you can download your spreadsheet back.  

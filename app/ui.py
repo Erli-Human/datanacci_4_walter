@@ -28,6 +28,8 @@ processing_state = {
 GRADIO_TEMP_ROOT = Path(tempfile.gettempdir()) / "gradio_kijiji_uploads"
 GRADIO_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 
+ASSETS_IMAGE_DIR = Path("app/assets/images")
+
 def safe_save_uploaded_file(file_obj):
     # Handles single uploaded file and returns a local temp file path (in a safe, writable temp directory)
     if hasattr(file_obj, "read"):
@@ -50,36 +52,57 @@ def safe_save_uploaded_file(file_obj):
             return Path(temp_file.name)
     raise ValueError(f"Unsupported file object type or not a file: {file_path_obj}")
 
+def get_static_images():
+    allowed_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+    images = []
+    if ASSETS_IMAGE_DIR.exists() and ASSETS_IMAGE_DIR.is_dir():
+        for f in ASSETS_IMAGE_DIR.iterdir():
+            if f.is_file() and f.suffix.lower() in allowed_exts:
+                images.append(f.name)
+    return images
+
 def get_image_files(images_upload):
     # Returns the list of image file names from uploaded files
-    if images_upload is None or len(images_upload) == 0:
-        return []
-    allowed_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
     files = []
-    for img in images_upload:
-        name = getattr(img, "name", None)
-        if name:
-            ext = Path(name).suffix.lower()
-            if ext in allowed_exts:
-                files.append(name)
+    allowed_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+    if images_upload is not None:
+        for img in images_upload:
+            name = getattr(img, "name", None)
+            if name:
+                ext = Path(name).suffix.lower()
+                if ext in allowed_exts:
+                    files.append(name)
+    # Add static images from assets directory, deduplicating
+    static_images = get_static_images()
+    for name in static_images:
+        if name not in files:
+            files.append(name)
     return files
 
 def save_uploaded_images(images_upload):
     # Save all uploaded images to a safe temp directory and return mapping {name: path}
-    if images_upload is None or len(images_upload) == 0:
-        return {}, None
     temp_dir = GRADIO_TEMP_ROOT / f"images_{uuid.uuid4().hex}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     name_to_path = {}
-    for img in images_upload:
-        img_name = Path(getattr(img, "name", uuid.uuid4().hex + ".img")).name
-        # Prevent path traversal or invalid filenames
-        img_name = img_name.replace("..", "").replace("\\", "_").replace("/", "_")
-        img_path = temp_dir / img_name
-        img.seek(0)
-        with open(img_path, "wb") as out_f:
-            out_f.write(img.read())
-        name_to_path[img_name] = str(img_path)
+
+    # Uploaded files
+    if images_upload is not None:
+        for img in images_upload:
+            img_name = Path(getattr(img, "name", uuid.uuid4().hex + ".img")).name
+            # Prevent path traversal or invalid filenames
+            img_name = img_name.replace("..", "").replace("\\", "_").replace("/", "_")
+            img_path = temp_dir / img_name
+            try:
+                img.seek(0)
+                with open(img_path, "wb") as out_f:
+                    out_f.write(img.read())
+                name_to_path[img_name] = str(img_path)
+            except Exception as e:
+                logger.error(f"Error saving uploaded image {img_name}: {e}")
+    # Add static images from assets directory
+    for static_img in get_static_images():
+        static_path = ASSETS_IMAGE_DIR / static_img
+        name_to_path[static_img] = str(static_path.resolve())
     return name_to_path, temp_dir
 
 def update_truck_dropdown(file):
@@ -182,8 +205,8 @@ def process_ads(email, password, file_obj, images_upload, mode, selected_truck_i
             return "Error: Email and password are required", {"error": "Missing credentials"}, "", 0
         if not file_obj:
             return "Error: Please upload a spreadsheet", {"error": "Missing spreadsheet"}, "", 0
-        if not images_upload or len(images_upload) == 0:
-            return "Error: Please upload at least one image", {"error": "Missing images upload"}, "", 0
+        if (images_upload is None or len(images_upload) == 0) and len(get_static_images()) == 0:
+            return "Error: Please upload at least one image or ensure app/assets/images contains images", {"error": "Missing images upload"}, "", 0
         temp_path = safe_save_uploaded_file(file_obj)
         name_to_path, temp_dir = save_uploaded_images(images_upload)
         for pct in range(0, 101, 10):
@@ -294,7 +317,7 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                     label="Select Image for Truck",
                     choices=[],
                     visible=True,
-                    info="Images you uploaded"
+                    info="Images you uploaded or in app/assets/images"
                 )
                 with gr.Row():
                     run_button = gr.Button(

@@ -4,7 +4,7 @@ import tempfile
 import shutil
 import logging
 from pathlib import Path
-from typing import Optional
+import platform
 from io import StringIO
 import uuid
 import os
@@ -25,23 +25,28 @@ processing_state = {
     'logs': []
 }
 
+def get_default_images_dir():
+    # Use Windows convention if on Windows, else POSIX
+    if platform.system() == "Windows":
+        return "app\\assets\\images"
+    else:
+        return "app/assets/images"
+
 def safe_save_uploaded_file(file_obj):
-    # rewritten to use NamedTemporaryFile for guaranteed file write permissions
-    import io
+    # Always save to a real temp file with write permissions
     if hasattr(file_obj, "read"):
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="wb")
-        temp_file.write(file_obj.read())
-        temp_file.close()
-        return Path(temp_file.name)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="wb") as temp_file:
+            temp_file.write(file_obj.read())
+            return Path(temp_file.name)
     file_path = str(getattr(file_obj, "name", file_obj))
     file_path_obj = Path(file_path)
     if file_path_obj.is_dir():
         raise ValueError(f"Uploaded path {file_path_obj} is a directory, not a file.")
     if file_path_obj.is_file() and os.access(file_path_obj, os.R_OK):
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_path_obj.suffix, mode="wb")
-        with open(file_path_obj, "rb") as src, open(temp_file.name, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-        return Path(temp_file.name)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_path_obj.suffix, mode="wb") as temp_file:
+            with open(file_path_obj, "rb") as src:
+                shutil.copyfileobj(src, temp_file)
+            return Path(temp_file.name)
     raise ValueError(f"Unsupported file object type or not a file: {file_path_obj}")
 
 def get_image_files(images_dir):
@@ -215,8 +220,8 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                 )
                 images_dir_input = gr.Textbox(
                     label="Images Directory Path",
-                    placeholder="/path/to/images",
-                    value="assets/images",
+                    placeholder=get_default_images_dir(),
+                    value=get_default_images_dir(),
                     info="Supported image types: JPG, PNG, GIF, WEBP"
                 )
                 gr.Markdown("### ⚙️ Processing Mode")

@@ -25,15 +25,7 @@ processing_state = {
     'logs': []
 }
 
-def get_default_images_dir():
-    # Use Windows convention if on Windows, else POSIX
-    if platform.system() == "Windows":
-        return "app\\assets\\images"
-    else:
-        return "app/assets/images"
-
 def safe_save_uploaded_file(file_obj):
-    # Always save to a real temp file with write permissions
     if hasattr(file_obj, "read"):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="wb") as temp_file:
             temp_file.write(file_obj.read())
@@ -49,36 +41,36 @@ def safe_save_uploaded_file(file_obj):
             return Path(temp_file.name)
     raise ValueError(f"Unsupported file object type or not a file: {file_path_obj}")
 
-def get_image_files(images_dir):
-    allowed_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
-    dir_path = Path(images_dir)
-    if not dir_path.exists() or not dir_path.is_dir():
+def get_image_files(images_upload):
+    if images_upload is None or len(images_upload) == 0:
         return []
-    return [f.name for f in dir_path.iterdir() if f.is_file() and f.suffix.lower() in allowed_exts]
+    # images_upload is a list of UploadedFile objects
+    allowed_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+    files = []
+    for img in images_upload:
+        name = getattr(img, "name", None)
+        if name:
+            ext = Path(name).suffix.lower()
+            if ext in allowed_exts:
+                files.append(name)
+    return files
 
-def update_truck_dropdown(file):
-    if file is None:
-        return gr.update(choices=["Upload spreadsheet first"], value=None)
-    try:
-        temp_path = safe_save_uploaded_file(file)
-        ext = temp_path.suffix.lower()
-        if ext == ".csv":
-            df = pd.read_csv(temp_path)
-        elif ext in [".xls", ".xlsx"]:
-            df = pd.read_excel(temp_path)
-        elif ext == ".ods":
-            df = pd.read_excel(temp_path, engine="odf")
-        else:
-            return gr.update(choices=["Unsupported spreadsheet format"], value=None)
-        if "bucket_truck_id" in df.columns:
-            ids = [str(i) for i in df["bucket_truck_id"].dropna().unique()]
-            return gr.update(choices=ids, value=ids[0] if ids else None)
-        else:
-            return gr.update(choices=["No 'bucket_truck_id' column"], value=None)
-    except Exception as e:
-        return gr.update(choices=[f"Error: {e}"], value=None)
+def save_uploaded_images(images_upload):
+    # Save all uploaded images to a temp directory and return mapping {name: path}
+    if images_upload is None or len(images_upload) == 0:
+        return {}, None
+    temp_dir = tempfile.mkdtemp(prefix="kijiji_images_")
+    name_to_path = {}
+    for img in images_upload:
+        img_name = Path(getattr(img, "name", uuid.uuid4().hex + ".img")).name
+        img_path = Path(temp_dir) / img_name
+        img.seek(0)
+        with open(img_path, "wb") as out_f:
+            out_f.write(img.read())
+        name_to_path[img_name] = str(img_path)
+    return name_to_path, temp_dir
 
-def update_image_dropdown_ui(truck_id, spreadsheet, images_dir):
+def update_image_dropdown_ui(truck_id, spreadsheet, images_upload):
     if spreadsheet is None or truck_id is None:
         return gr.update(choices=[], value=None)
     temp_path = safe_save_uploaded_file(spreadsheet)
@@ -87,7 +79,7 @@ def update_image_dropdown_ui(truck_id, spreadsheet, images_dir):
         image_filename = df[df["bucket_truck_id"] == truck_id]["image_filename"].values[0]
     except Exception:
         image_filename = None
-    available_images = get_image_files(images_dir)
+    available_images = get_image_files(images_upload)
     matched = image_filename if image_filename in available_images else None
     return gr.update(choices=available_images, value=matched or (available_images[0] if available_images else None))
 
@@ -95,10 +87,7 @@ def toggle_truck_dropdown(mode):
     visible = mode == "Single"
     return gr.update(visible=visible)
 
-def get_progress_info():
-    return processing_state['progress'], processing_state['current_message']
-
-def generate_rental_ad(record, image_url=None):
+def generate_rental_ad(record, image_url=None, contact_phone=None, include_email=False, include_phone=False, kijiji_email=None):
     title = f"{record.get('title', '')} - Now Available for Rent!"
     description = f"{record.get('description', '')}\n\n"
     description += f"**Rental Details:**\n"
@@ -108,28 +97,46 @@ def generate_rental_ad(record, image_url=None):
     description += f"• VIN: {record.get('vin_id', 'N/A')}\n"
     description += f"• Tags: {record.get('tags', '')}\n"
     description += f"• Status: {record.get('posting_status', '')}\n"
-    if image_url:
-        description += f"\n![Truck Image]({image_url})\n"
-    description += "\nContact us now to reserve this vehicle for your next project!"
+    description += "\nContact us now to reserve this vehicle for your next project!\n"
+
+    contact_lines = []
+    if include_email and kijiji_email:
+        contact_lines.append(f"📧 Email: {kijiji_email}")
+    if include_phone and contact_phone:
+        contact_lines.append(f"📞 Phone: {contact_phone}")
+    if contact_lines:
+        description += "\n" + "\n".join(contact_lines)
     return f"**{title}**\n\n{description}"
 
-def preview_ad(truck_id, spreadsheet, images_dir, selected_image):
+def preview_ad(
+    truck_id, spreadsheet, images_upload, image_dropdown,
+    contact_phone, include_email, include_phone, kijiji_email
+):
     if spreadsheet is None or truck_id is None:
-        return "Select a truck to preview its ad."
+        return "Select a truck to preview its ad.", None
     temp_path = safe_save_uploaded_file(spreadsheet)
     df = pd.read_csv(temp_path)
     rec = df[df["bucket_truck_id"] == truck_id]
     if rec.empty:
-        return "Truck record not found."
+        return "Truck record not found.", None
     rec = rec.iloc[0].to_dict()
-    image_url = None
-    if selected_image:
-        image_path = Path(images_dir) / selected_image
-        if image_path.exists():
-            image_url = image_path.as_posix()
-    return generate_rental_ad(rec, image_url=image_url)
 
-def process_ads(email, password, file_obj, images_dir, mode, selected_truck_id, selected_image, progress=gr.Progress(track_tqdm=True)):
+    image_path = None
+    name_to_path, _ = save_uploaded_images(images_upload)
+    if image_dropdown and image_dropdown in name_to_path:
+        image_path = name_to_path[image_dropdown]
+
+    ad_text = generate_rental_ad(
+        rec,
+        image_url=None,
+        contact_phone=contact_phone,
+        include_email=include_email,
+        include_phone=include_phone,
+        kijiji_email=kijiji_email
+    )
+    return ad_text, image_path
+
+def process_ads(email, password, file_obj, images_upload, mode, selected_truck_id, image_dropdown, contact_phone, include_email, include_phone, progress=gr.Progress(track_tqdm=True)):
     processing_state['is_running'] = True
     processing_state['progress'] = 0.0
     processing_state['current_message'] = 'Starting...'
@@ -142,9 +149,11 @@ def process_ads(email, password, file_obj, images_dir, mode, selected_truck_id, 
             return "Error: Email and password are required", {"error": "Missing credentials"}, "", 0
         if not file_obj:
             return "Error: Please upload a spreadsheet", {"error": "Missing spreadsheet"}, "", 0
-        if not images_dir:
-            return "Error: Please specify images directory", {"error": "Missing images directory"}, "", 0
+        if not images_upload or len(images_upload) == 0:
+            return "Error: Please upload at least one image", {"error": "Missing images upload"}, "", 0
         temp_path = safe_save_uploaded_file(file_obj)
+        # Save images to temp dir
+        name_to_path, temp_dir = save_uploaded_images(images_upload)
         for pct in range(0, 101, 10):
             import time
             time.sleep(0.1)
@@ -213,16 +222,28 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                     placeholder="Your password",
                     type="password"
                 )
-                gr.Markdown("### 📁 Files & Directories")
+                gr.Markdown("### ☎️ Contact Info")
+                contact_phone_input = gr.Textbox(
+                    label="Contact Phone Number (optional)",
+                    placeholder="e.g. 555-555-5555",
+                    type="text"
+                )
+                include_email_checkbox = gr.Checkbox(
+                    label="Include Kijiji email in ad?",
+                    value=True
+                )
+                include_phone_checkbox = gr.Checkbox(
+                    label="Include phone number in ad?",
+                    value=True
+                )
+                gr.Markdown("### 📁 Files & Images")
                 spreadsheet_input = gr.File(
                     label="Upload Spreadsheet (CSV, XLS, XLSX, ODS)",
                     file_types=[".csv", ".xls", ".xlsx", ".ods"]
                 )
-                images_dir_input = gr.Textbox(
-                    label="Images Directory Path",
-                    placeholder=get_default_images_dir(),
-                    value=get_default_images_dir(),
-                    info="Supported image types: JPG, PNG, GIF, WEBP"
+                images_upload_input = gr.Files(
+                    label="Upload Images (JPG, PNG, GIF, WEBP)",
+                    file_types=[".jpg", ".jpeg", ".png", ".gif", ".webp"]
                 )
                 gr.Markdown("### ⚙️ Processing Mode")
                 mode_input = gr.Radio(
@@ -241,7 +262,7 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                     label="Select Image for Truck",
                     choices=[],
                     visible=True,
-                    info="Images in selected directory"
+                    info="Images you uploaded"
                 )
                 with gr.Row():
                     run_button = gr.Button(
@@ -277,9 +298,20 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
                     visible=False
                 )
                 gr.Markdown("### 👀 Preview Truck Ad Before Posting")
-                ad_preview = gr.Markdown(
-                    value="Select a truck to preview its rental ad here."
-                )
+                with gr.Row():
+                    ad_preview = gr.Markdown(value="Select a truck to preview its rental ad here.")
+                    image_preview = gr.Image(label="Preview Image", value=None, interactive=False, visible=True, height=320)
+        # Dropdown and preview update triggers
+        preview_inputs = [
+            truck_id_input,
+            spreadsheet_input,
+            images_upload_input,
+            image_dropdown,
+            contact_phone_input,
+            include_email_checkbox,
+            include_phone_checkbox,
+            email_input
+        ]
         spreadsheet_input.change(
             fn=update_truck_dropdown,
             inputs=[spreadsheet_input],
@@ -292,34 +324,35 @@ _Supported spreadsheet formats are CSV, XLS, XLSX, and ODS. Supported image form
         )
         truck_id_input.change(
             fn=update_image_dropdown_ui,
-            inputs=[truck_id_input, spreadsheet_input, images_dir_input],
+            inputs=[truck_id_input, spreadsheet_input, images_upload_input],
             outputs=[image_dropdown]
         )
-        images_dir_input.change(
+        images_upload_input.change(
             fn=update_image_dropdown_ui,
-            inputs=[truck_id_input, spreadsheet_input, images_dir_input],
+            inputs=[truck_id_input, spreadsheet_input, images_upload_input],
             outputs=[image_dropdown]
         )
-        truck_id_input.change(
-            fn=preview_ad,
-            inputs=[truck_id_input, spreadsheet_input, images_dir_input, image_dropdown],
-            outputs=[ad_preview]
-        )
-        image_dropdown.change(
-            fn=preview_ad,
-            inputs=[truck_id_input, spreadsheet_input, images_dir_input, image_dropdown],
-            outputs=[ad_preview]
-        )
+        for comp in [
+            truck_id_input, image_dropdown, contact_phone_input, include_email_checkbox, include_phone_checkbox
+        ]:
+            comp.change(
+                fn=preview_ad,
+                inputs=preview_inputs,
+                outputs=[ad_preview, image_preview]
+            )
         run_button.click(
             fn=process_ads,
             inputs=[
                 email_input,
                 password_input,
                 spreadsheet_input,
-                images_dir_input,
+                images_upload_input,
                 mode_input,
                 truck_id_input,
-                image_dropdown
+                image_dropdown,
+                contact_phone_input,
+                include_email_checkbox,
+                include_phone_checkbox
             ],
             outputs=[
                 status_output,

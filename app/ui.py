@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from io import StringIO
 import uuid
 import re
+import os  # <--- add this for chmod
 
 try:
     from . import data_io, posting, kijiji_bot
@@ -28,9 +29,16 @@ processing_state = {
 }
 
 def sanitize_filename(filename: str) -> str:
-    # Remove path parts and allow only safe characters
     basename = Path(filename).name
     return re.sub(r'[^A-Za-z0-9.\-_]', '_', basename)
+
+def is_path_within(parent: Path, child: Path) -> bool:
+    try:
+        parent = parent.resolve(strict=True)
+        child = child.resolve(strict=True)
+        return parent == child or parent in child.parents
+    except Exception:
+        return False
 
 def safe_save_uploaded_file(file_obj):
     temp_dir = Path(tempfile.gettempdir())
@@ -40,20 +48,23 @@ def safe_save_uploaded_file(file_obj):
     if hasattr(file_obj, "read"):
         with open(temp_path, "wb") as out_f:
             out_f.write(file_obj.read())
+        # Set permissions: owner read/write, no access for group/others
+        os.chmod(temp_path, 0o600)
         return temp_path
-    # Path-like object, check that it is a file, and restrict to temp/cwd
     file_path = str(getattr(file_obj, "name", file_obj))
     file_path_obj = Path(file_path)
     if file_path_obj.is_file():
-        # Only allow files within tempfile.gettempdir() or cwd
-        try:
-            file_path_obj_abs = file_path_obj.resolve(strict=True)
-            allowed_dirs = [temp_dir.resolve(), Path.cwd().resolve()]
-            if not any(str(file_path_obj_abs).startswith(str(ad)) for ad in allowed_dirs):
-                raise ValueError("Unsafe file path detected.")
-        except Exception:
-            raise ValueError("Invalid or unsafe file path.")
+        file_path_obj_abs = file_path_obj.resolve(strict=True)
+        allowed_dirs = [
+            temp_dir.resolve(),
+            Path.cwd().resolve(),
+            Path("/tmp").resolve()
+        ]
+        if not any(is_path_within(ad, file_path_obj_abs) for ad in allowed_dirs):
+            raise ValueError(f"Unsafe file path detected: {file_path_obj_abs}")
         shutil.copy(file_path_obj, temp_path)
+        # Set permissions: owner read/write, no access for group/others
+        os.chmod(temp_path, 0o600)
         return temp_path
     if file_path_obj.is_dir():
         raise ValueError(f"Uploaded path {file_path_obj} is a directory, not a file.")
